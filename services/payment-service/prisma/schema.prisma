@@ -1,0 +1,502 @@
+// Payment Service Database Schema - AromaSouQ Platform
+// World-class payment processing system
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// PAYMENT METHODS & CARDS
+// ============================================
+
+enum PaymentProvider {
+  STRIPE          // International cards
+  TELR            // GCC/UAE focus
+  PAYTABS         // Alternative GCC
+  WALLET          // Internal wallet
+  BANK_TRANSFER   // Manual bank transfer
+  APPLE_PAY       // Apple Pay
+  GOOGLE_PAY      // Google Pay
+  COD             // Cash on Delivery
+}
+
+enum CardType {
+  VISA
+  MASTERCARD
+  AMEX
+  DISCOVER
+  DINERS
+  JCB
+  UNION_PAY
+  MADA            // Saudi Arabia
+}
+
+model SavedCard {
+  id              String       @id @default(uuid())
+
+  // User reference
+  userId          String
+
+  // Card details (tokenized)
+  token           String       @unique // Payment gateway token
+  provider        PaymentProvider
+
+  // Card info (last 4 digits only)
+  last4           String
+  brand           CardType
+  expiryMonth     Int
+  expiryYear      Int
+
+  // Cardholder
+  cardholderName  String
+
+  // Billing address
+  billingAddress  Json?
+
+  // Metadata
+  fingerprint     String?      // Card fingerprint for duplicate detection
+  isDefault       Boolean      @default(false)
+  isActive        Boolean      @default(true)
+
+  // Usage tracking
+  lastUsedAt      DateTime?
+
+  // Timestamps
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([userId])
+  @@index([token])
+  @@index([fingerprint])
+}
+
+// ============================================
+// PAYMENT INTENTS & TRANSACTIONS
+// ============================================
+
+enum PaymentStatus {
+  PENDING           // Payment initiated
+  PROCESSING        // Being processed
+  REQUIRES_ACTION   // Requires user action (3D Secure, etc.)
+  SUCCEEDED         // Payment successful
+  FAILED            // Payment failed
+  CANCELLED         // Payment cancelled
+  EXPIRED           // Payment intent expired
+  REFUNDED          // Fully refunded
+  PARTIALLY_REFUNDED // Partially refunded
+}
+
+enum PaymentMethod {
+  CARD
+  WALLET
+  COD
+  BANK_TRANSFER
+  APPLE_PAY
+  GOOGLE_PAY
+}
+
+model PaymentIntent {
+  id                String        @id @default(uuid())
+  intentId          String        @unique // External payment intent ID (Stripe, Telr, etc.)
+
+  // Order reference
+  orderId           String        @unique
+  orderNumber       String
+
+  // User reference
+  userId            String
+  userEmail         String
+
+  // Amount
+  amount            Decimal       @db.Decimal(10, 2)
+  currency          String        @default("AED")
+
+  // Payment details
+  provider          PaymentProvider
+  method            PaymentMethod
+  status            PaymentStatus @default(PENDING)
+
+  // Saved card reference (if used)
+  savedCardId       String?
+
+  // Payment breakdown
+  subtotal          Decimal       @db.Decimal(10, 2)
+  tax               Decimal       @db.Decimal(10, 2)
+  shippingFee       Decimal       @db.Decimal(10, 2)
+  discount          Decimal       @default(0) @db.Decimal(10, 2)
+  walletUsed        Decimal       @default(0) @db.Decimal(10, 2)
+  amountToPay       Decimal       @db.Decimal(10, 2) // Final amount to charge
+
+  // Gateway response
+  clientSecret      String?       // For client-side confirmation
+  requiresAction    Boolean       @default(false)
+  actionUrl         String?       // URL for 3D Secure, etc.
+
+  // Payment result
+  transactionId     String?       // Gateway transaction ID
+  receiptUrl        String?
+
+  // Error handling
+  failureCode       String?
+  failureMessage    String?
+
+  // Metadata
+  metadata          Json?
+  ipAddress         String?
+  userAgent         String?
+
+  // Related transactions
+  transaction       Transaction?
+  refunds           Refund[]
+
+  // Timestamps
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  expiresAt         DateTime?
+  succeededAt       DateTime?
+  failedAt          DateTime?
+
+  @@index([orderId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Transaction {
+  id                String        @id @default(uuid())
+  transactionNumber String        @unique // Human-readable (e.g., TXN-2024-001234)
+
+  // Payment intent reference
+  paymentIntentId   String        @unique
+  paymentIntent     PaymentIntent @relation(fields: [paymentIntentId], references: [id])
+
+  // Order & User
+  orderId           String
+  userId            String
+
+  // Transaction details
+  amount            Decimal       @db.Decimal(10, 2)
+  currency          String        @default("AED")
+  provider          PaymentProvider
+  method            PaymentMethod
+  status            PaymentStatus
+
+  // Gateway details
+  gatewayTransactionId String?    // External transaction ID
+  gatewayResponse      Json?      // Full gateway response
+
+  // Card details (if applicable)
+  cardLast4         String?
+  cardBrand         CardType?
+
+  // Fees
+  platformFee       Decimal       @default(0) @db.Decimal(10, 2)
+  gatewayFee        Decimal       @default(0) @db.Decimal(10, 2)
+  netAmount         Decimal       @db.Decimal(10, 2) // Amount after fees
+
+  // Settlement
+  settlementStatus  String        @default("pending") // pending, settled, failed
+  settlementDate    DateTime?
+  settlementId      String?
+
+  // Receipt
+  receiptNumber     String?
+  receiptUrl        String?
+
+  // Refunds
+  refunds           Refund[]
+  refundedAmount    Decimal       @default(0) @db.Decimal(10, 2)
+  isFullyRefunded   Boolean       @default(false)
+
+  // Timestamps
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([orderId])
+  @@index([userId])
+  @@index([status])
+  @@index([settlementStatus])
+  @@index([createdAt])
+}
+
+// ============================================
+// REFUNDS
+// ============================================
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum RefundReason {
+  REQUESTED_BY_CUSTOMER
+  DUPLICATE
+  FRAUDULENT
+  ORDER_CANCELLED
+  ITEM_RETURNED
+  PRICE_ADJUSTMENT
+  OTHER
+}
+
+model Refund {
+  id                String        @id @default(uuid())
+  refundNumber      String        @unique // Human-readable (e.g., REF-2024-001234)
+
+  // References
+  paymentIntentId   String
+  paymentIntent     PaymentIntent @relation(fields: [paymentIntentId], references: [id])
+
+  transactionId     String
+  transaction       Transaction   @relation(fields: [transactionId], references: [id])
+
+  orderId           String
+  userId            String
+
+  // Refund details
+  amount            Decimal       @db.Decimal(10, 2)
+  currency          String        @default("AED")
+  reason            RefundReason
+  reasonDescription String?
+
+  // Status
+  status            RefundStatus  @default(PENDING)
+
+  // Gateway details
+  gatewayRefundId   String?       // External refund ID
+  gatewayResponse   Json?
+
+  // Processing
+  provider          PaymentProvider
+  method            String        @default("original") // original, wallet, bank_transfer
+
+  // Destination (for wallet refunds)
+  walletTransactionId String?
+
+  // Error handling
+  failureCode       String?
+  failureMessage    String?
+
+  // Initiated by
+  initiatedBy       String?       // userId or system
+  initiatedByRole   String?       // customer, admin, system
+
+  // Admin notes
+  adminNotes        String?
+
+  // Timestamps
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  processedAt       DateTime?
+  succeededAt       DateTime?
+  failedAt          DateTime?
+
+  @@index([paymentIntentId])
+  @@index([transactionId])
+  @@index([orderId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ============================================
+// WALLET TRANSACTIONS
+// ============================================
+
+enum WalletTransactionType {
+  CREDIT            // Money added
+  DEBIT             // Money deducted
+  REFUND            // Refund from order
+  CASHBACK          // Cashback earned
+  BONUS             // Promotional bonus
+  PAYMENT           // Used for payment
+  WITHDRAWAL        // Withdrawn to bank
+  TRANSFER          // Transfer to another user
+  ADJUSTMENT        // Admin adjustment
+}
+
+model WalletTransaction {
+  id                String                @id @default(uuid())
+  transactionNumber String                @unique
+
+  // User reference
+  userId            String
+
+  // Transaction details
+  type              WalletTransactionType
+  amount            Decimal               @db.Decimal(10, 2)
+  currency          String                @default("AED")
+
+  // Balance tracking
+  balanceBefore     Decimal               @db.Decimal(10, 2)
+  balanceAfter      Decimal               @db.Decimal(10, 2)
+
+  // Reference
+  referenceType     String?               // order, refund, payment, bonus, etc.
+  referenceId       String?               // ID of the related entity
+
+  // Description
+  description       String
+  notes             String?
+
+  // Metadata
+  metadata          Json?
+
+  // Initiated by
+  initiatedBy       String?               // userId or system
+  initiatedByRole   String?               // customer, admin, system
+
+  // Expiration (for promotional credits)
+  expiresAt         DateTime?
+  isExpired         Boolean               @default(false)
+
+  // Timestamps
+  createdAt         DateTime              @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+}
+
+// ============================================
+// PAYMENT DISPUTES & CHARGEBACKS
+// ============================================
+
+enum DisputeStatus {
+  WARNING_NEEDS_RESPONSE
+  WARNING_UNDER_REVIEW
+  WARNING_CLOSED
+  NEEDS_RESPONSE
+  UNDER_REVIEW
+  CHARGE_REFUNDED
+  WON
+  LOST
+}
+
+model Dispute {
+  id                String        @id @default(uuid())
+  disputeNumber     String        @unique
+
+  // References
+  transactionId     String
+  orderId           String
+  userId            String
+
+  // Dispute details
+  amount            Decimal       @db.Decimal(10, 2)
+  currency          String        @default("AED")
+  reason            String        // fraudulent, unrecognized, duplicate, etc.
+  status            DisputeStatus
+
+  // Gateway details
+  gatewayDisputeId  String?
+  provider          PaymentProvider
+
+  // Evidence
+  evidence          Json?         // Evidence submitted
+  evidenceDetails   String?
+
+  // Deadline
+  respondBy         DateTime?
+
+  // Resolution
+  resolvedAt        DateTime?
+  resolution        String?       // won, lost, accepted, etc.
+
+  // Metadata
+  metadata          Json?
+
+  // Timestamps
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([transactionId])
+  @@index([orderId])
+  @@index([userId])
+  @@index([status])
+}
+
+// ============================================
+// PAYMENT WEBHOOKS LOG
+// ============================================
+
+model WebhookLog {
+  id            String   @id @default(uuid())
+
+  // Provider
+  provider      PaymentProvider
+
+  // Event details
+  eventType     String
+  eventId       String?  @unique
+
+  // Payload
+  payload       Json
+
+  // Processing
+  processed     Boolean  @default(false)
+  processedAt   DateTime?
+
+  // Result
+  success       Boolean?
+  errorMessage  String?
+
+  // Retry tracking
+  retryCount    Int      @default(0)
+  lastRetryAt   DateTime?
+
+  // Security
+  signature     String?
+  verified      Boolean  @default(false)
+
+  // Timestamps
+  createdAt     DateTime @default(now())
+
+  @@index([provider])
+  @@index([eventType])
+  @@index([processed])
+  @@index([createdAt])
+}
+
+// ============================================
+// PAYMENT SETTINGS (Admin)
+// ============================================
+
+model PaymentSettings {
+  id                String   @id @default(uuid())
+
+  // Provider configs (encrypted)
+  stripeConfig      Json?
+  telrConfig        Json?
+  paytabsConfig     Json?
+
+  // Feature flags
+  stripeEnabled     Boolean  @default(true)
+  telrEnabled       Boolean  @default(true)
+  paytabsEnabled    Boolean  @default(false)
+  walletEnabled     Boolean  @default(true)
+  codEnabled        Boolean  @default(true)
+  applePayEnabled   Boolean  @default(false)
+  googlePayEnabled  Boolean  @default(false)
+
+  // Limits
+  maxWalletBalance  Decimal  @db.Decimal(10, 2)
+  minOrderAmount    Decimal  @db.Decimal(10, 2)
+  maxOrderAmount    Decimal  @db.Decimal(10, 2)
+
+  // Fees
+  codFeePercentage  Decimal  @default(0) @db.Decimal(5, 2)
+  codFeeFixed       Decimal  @default(0) @db.Decimal(10, 2)
+
+  // Timestamps
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
