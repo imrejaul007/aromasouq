@@ -1,0 +1,542 @@
+// Order Service Database Schema - AromaSouQ Platform
+// World-class multi-vendor order management system
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// CART & CART ITEMS
+// ============================================
+
+model Cart {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  sessionId     String?  @unique // For guest users
+  items         CartItem[]
+
+  // Totals (calculated)
+  subtotal      Decimal  @default(0) @db.Decimal(10, 2)
+  tax           Decimal  @default(0) @db.Decimal(10, 2)
+  shipping      Decimal  @default(0) @db.Decimal(10, 2)
+  discount      Decimal  @default(0) @db.Decimal(10, 2)
+  total         Decimal  @default(0) @db.Decimal(10, 2)
+
+  // Applied discounts/coupons
+  appliedCoupons Json?
+
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  expiresAt     DateTime? // Cart expiration for guests
+
+  @@index([userId])
+  @@index([sessionId])
+}
+
+model CartItem {
+  id            String   @id @default(uuid())
+  cartId        String
+  cart          Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  // Product details (denormalized for performance)
+  productId     String
+  productSku    String
+  productName   String
+  productSlug   String
+  productImage  String?
+
+  // Vendor details
+  vendorId      String
+  vendorName    String
+
+  // Pricing
+  unitPrice     Decimal  @db.Decimal(10, 2)
+  quantity      Int
+  subtotal      Decimal  @db.Decimal(10, 2)
+
+  // Product attributes snapshot
+  attributes    Json? // volume, concentration, etc.
+
+  // Availability
+  inStock       Boolean  @default(true)
+  maxQuantity   Int?
+
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([cartId])
+  @@index([productId])
+  @@index([vendorId])
+}
+
+// ============================================
+// ORDERS
+// ============================================
+
+enum OrderStatus {
+  PENDING           // Order created, awaiting payment
+  PAYMENT_PENDING   // Payment initiated
+  PAYMENT_FAILED    // Payment failed
+  CONFIRMED         // Payment confirmed
+  PROCESSING        // Being prepared by vendor
+  READY_TO_SHIP     // Ready for pickup by courier
+  SHIPPED           // Shipped/in transit
+  OUT_FOR_DELIVERY  // Out for delivery
+  DELIVERED         // Successfully delivered
+  COMPLETED         // Order completed and confirmed
+  CANCELLED         // Cancelled by customer
+  CANCELLED_BY_VENDOR // Cancelled by vendor
+  REFUND_PENDING    // Refund requested
+  REFUNDED          // Refund completed
+  FAILED            // Order failed
+}
+
+enum PaymentMethod {
+  CARD              // Credit/Debit card
+  WALLET            // AromaSouQ wallet
+  COD               // Cash on delivery
+  BANK_TRANSFER     // Bank transfer
+  APPLE_PAY         // Apple Pay
+  GOOGLE_PAY        // Google Pay
+}
+
+enum DeliveryType {
+  STANDARD          // Standard delivery
+  EXPRESS           // Express delivery
+  SAME_DAY          // Same day delivery
+  SCHEDULED         // Scheduled delivery
+  PICKUP            // Store pickup
+}
+
+model Order {
+  id                String      @id @default(uuid())
+  orderNumber       String      @unique // Human-readable order number (e.g., ORD-2024-001234)
+
+  // User details
+  userId            String
+  userEmail         String
+  userPhone         String?
+
+  // Order status
+  status            OrderStatus @default(PENDING)
+
+  // Sub-orders (vendor splits)
+  subOrders         SubOrder[]
+
+  // Delivery address
+  shippingAddress   Json // Full address object
+  billingAddress    Json?
+
+  // Payment details
+  paymentMethod     PaymentMethod
+  paymentStatus     String      @default("pending")
+  paymentId         String?     // External payment ID
+
+  // Pricing breakdown
+  subtotal          Decimal     @db.Decimal(10, 2)
+  tax               Decimal     @db.Decimal(10, 2)
+  taxRate           Decimal     @default(5) @db.Decimal(5, 2) // VAT percentage
+  shippingFee       Decimal     @db.Decimal(10, 2)
+  discount          Decimal     @default(0) @db.Decimal(10, 2)
+  couponDiscount    Decimal     @default(0) @db.Decimal(10, 2)
+  walletUsed        Decimal     @default(0) @db.Decimal(10, 2)
+  cashbackEarned    Decimal     @default(0) @db.Decimal(10, 2)
+  total             Decimal     @db.Decimal(10, 2)
+
+  // Applied coupons
+  appliedCoupons    Json?
+
+  // Delivery details
+  deliveryType      DeliveryType @default(STANDARD)
+  estimatedDelivery DateTime?
+  actualDelivery    DateTime?
+
+  // Special instructions
+  customerNotes     String?
+  giftMessage       String?
+  isGift            Boolean     @default(false)
+
+  // Timeline tracking
+  timeline          OrderTimeline[]
+
+  // Metadata
+  metadata          Json? // For extensibility (device info, source, etc.)
+  ipAddress         String?
+  userAgent         String?
+
+  // Timestamps
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  confirmedAt       DateTime?
+  cancelledAt       DateTime?
+  completedAt       DateTime?
+
+  @@index([userId])
+  @@index([orderNumber])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Sub-order for each vendor (multi-vendor split)
+model SubOrder {
+  id                String      @id @default(uuid())
+  subOrderNumber    String      @unique
+
+  // Parent order
+  orderId           String
+  order             Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // Vendor details
+  vendorId          String
+  vendorName        String
+  vendorEmail       String?
+  vendorPhone       String?
+
+  // Sub-order status
+  status            OrderStatus @default(PENDING)
+
+  // Items in this sub-order
+  items             OrderItem[]
+
+  // Pricing for this vendor
+  subtotal          Decimal     @db.Decimal(10, 2)
+  tax               Decimal     @db.Decimal(10, 2)
+  shippingFee       Decimal     @db.Decimal(10, 2)
+  total             Decimal     @db.Decimal(10, 2)
+
+  // Vendor commission
+  commissionRate    Decimal     @default(10) @db.Decimal(5, 2) // Platform fee %
+  commissionAmount  Decimal     @db.Decimal(10, 2)
+  vendorPayout      Decimal     @db.Decimal(10, 2) // Amount vendor receives
+
+  // Delivery tracking
+  trackingNumber    String?
+  courierName       String?
+  courierWebsite    String?
+  shipmentId        String? // Delivery service shipment ID
+
+  // Fulfillment
+  fulfillmentType   String      @default("vendor") // vendor, platform, dropship
+  estimatedShipDate DateTime?
+  actualShipDate    DateTime?
+
+  // Timeline
+  timeline          SubOrderTimeline[]
+
+  // Timestamps
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  shippedAt         DateTime?
+  deliveredAt       DateTime?
+
+  @@index([orderId])
+  @@index([vendorId])
+  @@index([status])
+}
+
+model OrderItem {
+  id                String   @id @default(uuid())
+  subOrderId        String
+  subOrder          SubOrder @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+
+  // Product details (snapshot at time of order)
+  productId         String
+  productSku        String
+  productName       String
+  productSlug       String
+  productImage      String?
+
+  // Pricing
+  unitPrice         Decimal  @db.Decimal(10, 2)
+  quantity          Int
+  subtotal          Decimal  @db.Decimal(10, 2)
+  tax               Decimal  @db.Decimal(10, 2)
+  total             Decimal  @db.Decimal(10, 2)
+
+  // Product attributes snapshot
+  attributes        Json? // volume, concentration, brand, etc.
+
+  // Return/refund tracking
+  isRefunded        Boolean  @default(false)
+  refundAmount      Decimal? @db.Decimal(10, 2)
+  refundReason      String?
+  refundedAt        DateTime?
+
+  // Review tracking
+  isReviewed        Boolean  @default(false)
+  reviewId          String?
+
+  // Timestamps
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([subOrderId])
+  @@index([productId])
+}
+
+// ============================================
+// ORDER TIMELINE & TRACKING
+// ============================================
+
+model OrderTimeline {
+  id          String   @id @default(uuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  status      OrderStatus
+  message     String
+  notes       String?
+
+  // Who made this change
+  updatedBy   String? // userId or system
+  updatedByRole String? // customer, vendor, admin, system
+
+  createdAt   DateTime @default(now())
+
+  @@index([orderId])
+  @@index([createdAt])
+}
+
+model SubOrderTimeline {
+  id          String   @id @default(uuid())
+  subOrderId  String
+  subOrder    SubOrder @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+
+  status      OrderStatus
+  message     String
+  notes       String?
+
+  // Location tracking
+  location    String?
+  latitude    Decimal? @db.Decimal(10, 7)
+  longitude   Decimal? @db.Decimal(10, 7)
+
+  // Who made this change
+  updatedBy   String?
+  updatedByRole String?
+
+  createdAt   DateTime @default(now())
+
+  @@index([subOrderId])
+  @@index([createdAt])
+}
+
+// ============================================
+// INVENTORY RESERVATIONS
+// ============================================
+
+model InventoryReservation {
+  id            String   @id @default(uuid())
+
+  // Product details
+  productId     String
+  productSku    String
+  vendorId      String
+
+  // Reservation details
+  quantity      Int
+  reservedFor   String // orderId or cartId
+  reservationType String // order, cart
+
+  // Status
+  status        String   @default("active") // active, released, fulfilled
+
+  // Expiration
+  expiresAt     DateTime
+  releasedAt    DateTime?
+  fulfilledAt   DateTime?
+
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([productId])
+  @@index([vendorId])
+  @@index([reservedFor])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+// ============================================
+// RETURNS & REFUNDS
+// ============================================
+
+enum ReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PICKUP_SCHEDULED
+  PICKED_UP
+  RECEIVED
+  INSPECTED
+  APPROVED_FOR_REFUND
+  REFUNDED
+  COMPLETED
+  CANCELLED
+}
+
+model ReturnRequest {
+  id              String       @id @default(uuid())
+  returnNumber    String       @unique
+
+  // Order reference
+  orderId         String
+  subOrderId      String
+  userId          String
+
+  // Items to return
+  items           ReturnItem[]
+
+  // Return details
+  reason          String
+  reasonCode      String // defective, wrong_item, not_as_described, changed_mind, etc.
+  description     String?
+  images          Json? // Array of image URLs
+
+  // Status
+  status          ReturnStatus @default(REQUESTED)
+
+  // Refund details
+  refundAmount    Decimal      @db.Decimal(10, 2)
+  refundMethod    String? // original_method, wallet, bank_transfer
+  refundStatus    String       @default("pending")
+  refundedAmount  Decimal?     @db.Decimal(10, 2)
+  refundedAt      DateTime?
+
+  // Pickup details
+  pickupAddress   Json?
+  pickupScheduled DateTime?
+  pickedUpAt      DateTime?
+
+  // Timeline
+  timeline        ReturnTimeline[]
+
+  // Admin notes
+  adminNotes      String?
+
+  // Timestamps
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  approvedAt      DateTime?
+  completedAt     DateTime?
+
+  @@index([userId])
+  @@index([orderId])
+  @@index([status])
+}
+
+model ReturnItem {
+  id              String        @id @default(uuid())
+  returnRequestId String
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+
+  orderItemId     String
+  productId       String
+  productName     String
+  productImage    String?
+
+  quantity        Int
+  refundAmount    Decimal       @db.Decimal(10, 2)
+
+  condition       String? // unopened, opened, damaged, defective
+
+  createdAt       DateTime      @default(now())
+
+  @@index([returnRequestId])
+  @@index([orderItemId])
+}
+
+model ReturnTimeline {
+  id              String        @id @default(uuid())
+  returnRequestId String
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+
+  status          ReturnStatus
+  message         String
+  notes           String?
+
+  updatedBy       String?
+  updatedByRole   String?
+
+  createdAt       DateTime      @default(now())
+
+  @@index([returnRequestId])
+}
+
+// ============================================
+// COUPONS & DISCOUNTS
+// ============================================
+
+enum CouponType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_SHIPPING
+  BUY_X_GET_Y
+}
+
+model Coupon {
+  id              String     @id @default(uuid())
+  code            String     @unique
+
+  // Coupon details
+  name            String
+  description     String?
+  type            CouponType
+
+  // Discount value
+  value           Decimal    @db.Decimal(10, 2) // Percentage or amount
+  maxDiscount     Decimal?   @db.Decimal(10, 2) // Max discount for percentage coupons
+
+  // Conditions
+  minOrderValue   Decimal?   @db.Decimal(10, 2)
+  maxUses         Int?       // Total uses allowed
+  usesPerUser     Int?       @default(1)
+  currentUses     Int        @default(0)
+
+  // Applicability
+  applicableTo    Json? // product_ids, category_ids, brand_ids
+  excludedItems   Json? // Items this coupon cannot be used on
+
+  // User restrictions
+  applicableUsers Json? // Specific user IDs or user groups
+  firstOrderOnly  Boolean    @default(false)
+
+  // Validity
+  validFrom       DateTime
+  validUntil      DateTime
+  isActive        Boolean    @default(true)
+
+  // Usage tracking
+  usageHistory    CouponUsage[]
+
+  // Timestamps
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([code])
+  @@index([isActive])
+}
+
+model CouponUsage {
+  id          String   @id @default(uuid())
+  couponId    String
+  coupon      Coupon   @relation(fields: [couponId], references: [id])
+
+  userId      String
+  orderId     String
+
+  discount    Decimal  @db.Decimal(10, 2)
+
+  createdAt   DateTime @default(now())
+
+  @@index([couponId])
+  @@index([userId])
+  @@index([orderId])
+}
