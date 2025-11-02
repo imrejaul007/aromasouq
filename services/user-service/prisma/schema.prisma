@@ -1,0 +1,183 @@
+// AromaSouQ User Service - Prisma Schema
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Model
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  phone           String?   @unique
+  phoneVerified   Boolean   @default(false)
+  emailVerified   Boolean   @default(false)
+  password        String // hashed with bcrypt
+  firstName       String
+  lastName        String
+  avatar          String?
+  role            UserRole  @default(CUSTOMER)
+  isActive        Boolean   @default(true)
+  isBanned        Boolean   @default(false)
+  lastLoginAt     DateTime?
+  walletBalance   Decimal   @default(0) @db.Decimal(10, 2)
+  totalSpent      Decimal   @default(0) @db.Decimal(10, 2)
+  totalOrders     Int       @default(0)
+
+  // Preferences (JSON)
+  preferences     Json      @default("{\"language\":\"en\",\"currency\":\"AED\",\"notifications\":{\"email\":true,\"sms\":true,\"push\":true,\"whatsapp\":false},\"marketing\":{\"emailMarketing\":false,\"smsMarketing\":false}}")
+
+  // Relationships
+  addresses       Address[]
+  walletTransactions WalletTransaction[]
+  refreshTokens   RefreshToken[]
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  @@index([email])
+  @@index([phone])
+  @@index([role])
+  @@map("users")
+}
+
+// User Role Enum
+enum UserRole {
+  CUSTOMER
+  VENDOR
+  INFLUENCER
+  ADMIN
+  SUPER_ADMIN
+}
+
+// Address Model
+model Address {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type            AddressType @default(HOME)
+  fullName        String
+  phone           String
+  addressLine1    String
+  addressLine2    String?
+  city            String
+  state           String?
+  country         String   @default("AE")
+  postalCode      String
+  isDefault       Boolean  @default(false)
+
+  // Coordinates (optional)
+  latitude        Decimal? @db.Decimal(10, 8)
+  longitude       Decimal? @db.Decimal(11, 8)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@index([isDefault])
+  @@map("addresses")
+}
+
+enum AddressType {
+  HOME
+  WORK
+  OTHER
+}
+
+// Wallet Transaction Model
+model WalletTransaction {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type            TransactionType
+  amount          Decimal  @db.Decimal(10, 2)
+  currency        String   @default("AED")
+  reason          TransactionReason
+  referenceId     String? // Order ID, refund ID, etc.
+
+  balanceBefore   Decimal  @db.Decimal(10, 2)
+  balanceAfter    Decimal  @db.Decimal(10, 2)
+
+  status          TransactionStatus @default(PENDING)
+  description     String
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("wallet_transactions")
+}
+
+enum TransactionType {
+  CREDIT
+  DEBIT
+}
+
+enum TransactionReason {
+  ORDER
+  REFUND
+  CASHBACK
+  BONUS
+  WITHDRAWAL
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+// Refresh Token Model (for JWT refresh tokens)
+model RefreshToken {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  token       String   @unique
+  expiresAt   DateTime
+  isRevoked   Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// Email Verification Token
+model EmailVerificationToken {
+  id        String   @id @default(uuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@index([token])
+  @@map("email_verification_tokens")
+}
+
+// Password Reset Token
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@index([token])
+  @@map("password_reset_tokens")
+}
