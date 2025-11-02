@@ -1,0 +1,35 @@
+{
+  "name": "aromasouq-platform",
+  "version": "1.0.0",
+  "description": "AromaSouQ - Luxury Multi-Vendor Fragrance Marketplace",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\"",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "db:migrate": "cd services/database && npm run migrate",
+    "db:seed": "cd services/database && npm run seed",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  },
+  "devDependencies": {
+    "@turbo/gen": "^1.11.2",
+    "turbo": "^1.11.2",
+    "prettier": "^3.1.1",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "author": "AromaSouQ Team",
+  "license": "PROPRIETARY"
+}
