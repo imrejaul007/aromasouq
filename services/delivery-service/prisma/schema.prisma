@@ -1,0 +1,490 @@
+// Delivery Service Database Schema - AromaSouQ Platform
+// World-class delivery & logistics system
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// COURIER PARTNERS
+// ============================================
+
+enum CourierProvider {
+  FETCHR        // UAE same-day delivery specialist
+  ARAMEX        // GCC-wide, regional leader
+  SMSA          // Saudi Arabia specialist
+  DHL           // International express
+  FEDEX         // International express
+  UPS           // International express
+  CUSTOM        // In-house/custom delivery
+}
+
+enum CourierStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  TESTING
+}
+
+model Courier {
+  id                String          @id @default(uuid())
+
+  // Courier details
+  provider          CourierProvider @unique
+  name              String
+  displayName       String
+  logo              String?
+  website           String?
+
+  // Status
+  status            CourierStatus   @default(ACTIVE)
+
+  // Service areas
+  countries         Json            // Array of country codes
+  cities            Json            // Array of city names
+  sameDayCities     Json?           // Cities with same-day delivery
+
+  // Capabilities
+  supportsSameDay   Boolean         @default(false)
+  supportsExpress   Boolean         @default(false)
+  supportsStandard  Boolean         @default(true)
+  supportsScheduled Boolean         @default(false)
+  supportsCOD       Boolean         @default(false)
+  supportsTracking  Boolean         @default(true)
+
+  // API Configuration (encrypted)
+  apiConfig         Json            // API credentials, endpoints, etc.
+
+  // Pricing
+  baseFee           Decimal         @db.Decimal(10, 2)
+  perKgRate         Decimal         @db.Decimal(10, 2)
+  codFeePercentage  Decimal         @default(0) @db.Decimal(5, 2)
+
+  // Operational limits
+  maxWeight         Decimal         @db.Decimal(10, 2) // in kg
+  maxDimensions     Json            // length, width, height in cm
+
+  // SLA
+  standardDeliveryDays  Int         @default(3)
+  expressDeliveryDays   Int         @default(1)
+
+  // Statistics
+  totalShipments    Int             @default(0)
+  successRate       Decimal         @default(100) @db.Decimal(5, 2)
+
+  // Relations
+  shipments         Shipment[]
+  rateCards         CourierRateCard[]
+
+  // Timestamps
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([provider])
+  @@index([status])
+}
+
+// ============================================
+// COURIER RATE CARDS
+// ============================================
+
+enum DeliveryType {
+  STANDARD
+  EXPRESS
+  SAME_DAY
+  SCHEDULED
+}
+
+model CourierRateCard {
+  id            String       @id @default(uuid())
+
+  // Courier reference
+  courierId     String
+  courier       Courier      @relation(fields: [courierId], references: [id])
+
+  // Location
+  fromCountry   String
+  fromCity      String?
+  toCountry     String
+  toCity        String?
+
+  // Delivery type
+  deliveryType  DeliveryType
+
+  // Weight ranges
+  minWeight     Decimal      @db.Decimal(10, 2) // kg
+  maxWeight     Decimal      @db.Decimal(10, 2) // kg
+
+  // Pricing
+  baseFee       Decimal      @db.Decimal(10, 2)
+  perKgRate     Decimal      @db.Decimal(10, 2)
+  fuelSurcharge Decimal      @default(0) @db.Decimal(10, 2)
+
+  // Validity
+  validFrom     DateTime
+  validUntil    DateTime?
+  isActive      Boolean      @default(true)
+
+  // Timestamps
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([courierId])
+  @@index([fromCountry, toCountry])
+  @@index([deliveryType])
+  @@index([isActive])
+}
+
+// ============================================
+// SHIPMENTS
+// ============================================
+
+enum ShipmentStatus {
+  PENDING           // Shipment created, awaiting processing
+  CONFIRMED         // Confirmed by courier
+  PICKED_UP         // Picked up from origin
+  IN_TRANSIT        // In transit
+  OUT_FOR_DELIVERY  // Out for delivery
+  DELIVERED         // Successfully delivered
+  FAILED_DELIVERY   // Delivery attempt failed
+  RETURNED          // Returned to sender
+  CANCELLED         // Shipment cancelled
+  ON_HOLD           // On hold (customs, etc.)
+  EXCEPTION         // Exception occurred
+}
+
+model Shipment {
+  id                String          @id @default(uuid())
+  shipmentNumber    String          @unique // Human-readable (e.g., SHP-2024-001234)
+
+  // Order reference
+  orderId           String
+  subOrderId        String          @unique
+  orderNumber       String
+
+  // Courier
+  courierId         String
+  courier           Courier         @relation(fields: [courierId], references: [id])
+  courierProvider   CourierProvider
+
+  // Tracking
+  trackingNumber    String?         @unique
+  awbNumber         String?         // Air Waybill Number
+  trackingUrl       String?
+
+  // Status
+  status            ShipmentStatus  @default(PENDING)
+
+  // Delivery type
+  deliveryType      DeliveryType
+
+  // Customer details
+  customerId        String
+  customerName      String
+  customerEmail     String
+  customerPhone     String
+
+  // Shipping address
+  shippingAddress   Json            // Complete address object
+
+  // Pickup address (vendor location)
+  pickupAddress     Json
+
+  // Package details
+  packageCount      Int             @default(1)
+  totalWeight       Decimal         @db.Decimal(10, 2) // kg
+  dimensions        Json?           // length, width, height, volumetric weight
+
+  // Items
+  items             Json            // Array of items in shipment
+  declaredValue     Decimal         @db.Decimal(10, 2)
+
+  // COD
+  isCOD             Boolean         @default(false)
+  codAmount         Decimal?        @db.Decimal(10, 2)
+  codCollected      Boolean         @default(false)
+  codCollectedAt    DateTime?
+
+  // Pricing
+  shippingFee       Decimal         @db.Decimal(10, 2)
+  insuranceFee      Decimal         @default(0) @db.Decimal(10, 2)
+  codFee            Decimal         @default(0) @db.Decimal(10, 2)
+  totalFee          Decimal         @db.Decimal(10, 2)
+
+  // Estimated delivery
+  estimatedPickup   DateTime?
+  estimatedDelivery DateTime?
+
+  // Actual timestamps
+  pickedUpAt        DateTime?
+  deliveredAt       DateTime?
+
+  // Delivery proof
+  signature         String?         // Signature image URL
+  deliveredTo       String?         // Name of person who received
+  deliveryPhoto     String?         // Photo proof URL
+
+  // Return shipment
+  isReturn          Boolean         @default(false)
+  returnReason      String?
+  originalShipmentId String?
+
+  // Special instructions
+  deliveryInstructions String?
+  handleWithCare    Boolean         @default(false)
+  requiresSignature Boolean         @default(true)
+
+  // Tracking events
+  trackingEvents    TrackingEvent[]
+
+  // Webhook logs
+  webhookLogs       ShipmentWebhookLog[]
+
+  // Metadata
+  metadata          Json?
+
+  // Timestamps
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  cancelledAt       DateTime?
+
+  @@index([orderId])
+  @@index([subOrderId])
+  @@index([customerId])
+  @@index([courierId])
+  @@index([trackingNumber])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ============================================
+// TRACKING EVENTS
+// ============================================
+
+model TrackingEvent {
+  id            String      @id @default(uuid())
+
+  // Shipment reference
+  shipmentId    String
+  shipment      Shipment    @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  // Event details
+  status        ShipmentStatus
+  statusCode    String?     // Courier-specific status code
+  message       String
+  description   String?
+
+  // Location
+  location      String?
+  city          String?
+  country       String?
+  latitude      Decimal?    @db.Decimal(10, 7)
+  longitude     Decimal?    @db.Decimal(10, 7)
+
+  // Facility
+  facilityCode  String?
+  facilityName  String?
+
+  // Courier reference
+  courierEventId String?
+
+  // Timestamp
+  eventTimestamp DateTime
+  createdAt     DateTime    @default(now())
+
+  @@index([shipmentId])
+  @@index([status])
+  @@index([eventTimestamp])
+}
+
+// ============================================
+// DELIVERY ZONES
+// ============================================
+
+enum ZoneType {
+  CITY
+  DISTRICT
+  POSTAL_CODE
+}
+
+model DeliveryZone {
+  id                String      @id @default(uuid())
+
+  // Zone details
+  name              String
+  code              String      @unique
+  type              ZoneType
+
+  // Location
+  country           String
+  city              String?
+  district          String?
+  postalCodes       Json?       // Array of postal codes
+
+  // Service availability
+  standardAvailable Boolean     @default(true)
+  expressAvailable  Boolean     @default(false)
+  sameDayAvailable  Boolean     @default(false)
+
+  // Delivery timeframes
+  standardDays      Int         @default(3)
+  expressDays       Int         @default(1)
+
+  // Pricing multiplier
+  pricingMultiplier Decimal     @default(1) @db.Decimal(5, 2)
+
+  // Status
+  isActive          Boolean     @default(true)
+
+  // Coordinates (for mapping)
+  coordinates       Json?       // GeoJSON polygon
+
+  // Timestamps
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([code])
+  @@index([country])
+  @@index([city])
+  @@index([isActive])
+}
+
+// ============================================
+// RATE SHOPPING HISTORY
+// ============================================
+
+model RateShopHistory {
+  id                String      @id @default(uuid())
+
+  // Request details
+  fromAddress       Json
+  toAddress         Json
+  weight            Decimal     @db.Decimal(10, 2)
+  dimensions        Json?
+  deliveryType      DeliveryType
+  codAmount         Decimal?    @db.Decimal(10, 2)
+
+  // Results
+  quotes            Json        // Array of courier quotes
+
+  // Selected option
+  selectedCourier   CourierProvider?
+  selectedQuote     Json?
+
+  // Timestamps
+  createdAt         DateTime    @default(now())
+
+  @@index([createdAt])
+}
+
+// ============================================
+// SHIPMENT WEBHOOKS LOG
+// ============================================
+
+model ShipmentWebhookLog {
+  id            String      @id @default(uuid())
+
+  // Shipment reference
+  shipmentId    String
+  shipment      Shipment    @relation(fields: [shipmentId], references: [id])
+
+  // Courier
+  courier       CourierProvider
+
+  // Event details
+  eventType     String
+  eventId       String?
+
+  // Payload
+  payload       Json
+
+  // Processing
+  processed     Boolean     @default(false)
+  processedAt   DateTime?
+
+  // Result
+  success       Boolean?
+  errorMessage  String?
+
+  // Security
+  signature     String?
+  verified      Boolean     @default(false)
+
+  // Timestamps
+  createdAt     DateTime    @default(now())
+
+  @@index([shipmentId])
+  @@index([courier])
+  @@index([processed])
+  @@index([createdAt])
+}
+
+// ============================================
+// DELIVERY ISSUES
+// ============================================
+
+enum IssueType {
+  ADDRESS_INCORRECT
+  CUSTOMER_UNAVAILABLE
+  REFUSED_DELIVERY
+  DAMAGED_PACKAGE
+  LOST_PACKAGE
+  DELAYED
+  WEATHER_DELAY
+  CUSTOMS_HOLD
+  OTHER
+}
+
+enum IssueStatus {
+  REPORTED
+  INVESTIGATING
+  RESOLVED
+  ESCALATED
+  CLOSED
+}
+
+model DeliveryIssue {
+  id              String       @id @default(uuid())
+  issueNumber     String       @unique
+
+  // Shipment reference
+  shipmentId      String
+  trackingNumber  String
+
+  // Issue details
+  type            IssueType
+  status          IssueStatus  @default(REPORTED)
+  description     String
+  impact          String?      // Impact description
+
+  // Reporter
+  reportedBy      String       // userId, system, courier
+  reporterRole    String       // customer, vendor, admin, system
+
+  // Images/evidence
+  photos          Json?        // Array of photo URLs
+  documents       Json?
+
+  // Resolution
+  resolution      String?
+  resolvedBy      String?
+  resolvedAt      DateTime?
+
+  // Compensation
+  refundAmount    Decimal?     @db.Decimal(10, 2)
+  compensationType String?     // refund, redelivery, credit
+
+  // Timestamps
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([shipmentId])
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+}
