@@ -421,3 +421,264 @@ model PasswordResetToken {
   @@index([token])
   @@map("password_reset_tokens")
 }
+
+// ==================== VENDOR MANAGEMENT SYSTEM ====================
+
+// Vendor Profile - Extended information for vendor users
+model VendorProfile {
+  id                    String   @id @default(uuid())
+  userId                String   @unique // Links to User model
+
+  // Business Information
+  businessName          String
+  businessNameArabic    String?
+  brandName             String   // Public-facing brand name
+  brandSlug             String   @unique
+  description           String   @db.Text
+  descriptionArabic     String?  @db.Text
+
+  // Legal Information
+  tradeLicenseNumber    String   @unique
+  tradeLicenseExpiry    DateTime
+  taxRegistrationNumber String?  @unique // VAT/TRN
+
+  // Business Details
+  businessType          VendorBusinessType
+  categoryIds           String[] // Product categories they sell
+
+  // Contact Information
+  businessEmail         String
+  businessPhone         String
+  whatsappNumber        String?
+
+  // Business Address
+  businessAddress       Json     // Full address object
+  warehouseAddress      Json?    // Separate warehouse if different
+
+  // Bank Details (for payouts)
+  bankName              String?
+  bankAccountNumber     String?
+  bankAccountName       String?
+  iban                  String?
+  swiftCode             String?
+
+  // Media
+  logo                  String?  // Logo URL
+  banner                String?  // Banner image URL
+  galleries             String[] // Gallery images
+
+  // Verification & Status
+  verificationStatus    VendorVerificationStatus @default(PENDING)
+  verifiedAt            DateTime?
+  verifiedBy            String?  // Admin user ID
+
+  isActive              Boolean  @default(false) // Can list products
+  isFeatured            Boolean  @default(false) // Featured vendor
+  isSuspended           Boolean  @default(false)
+  suspensionReason      String?
+
+  // Commission Settings
+  commissionRate        Decimal  @default(10) @db.Decimal(5, 2) // Percentage (default 10%)
+  customCommissionRate  Boolean  @default(false) // Has negotiated rate
+
+  // Stats
+  totalProducts         Int      @default(0)
+  totalOrders           Int      @default(0)
+  totalRevenue          Decimal  @default(0) @db.Decimal(12, 2)
+  totalCommission       Decimal  @default(0) @db.Decimal(12, 2)
+  averageRating         Decimal  @default(0) @db.Decimal(3, 2)
+  totalReviews          Int      @default(0)
+
+  // Fulfillment Settings
+  shippingEnabled       Boolean  @default(true)
+  freeShippingThreshold Decimal? @db.Decimal(10, 2) // Minimum order for free shipping
+  shippingFee           Decimal? @db.Decimal(10, 2) // Flat shipping fee
+  averageProcessingDays Int      @default(2) // Days to process order
+
+  // Policies
+  returnPolicy          String?  @db.Text
+  shippingPolicy        String?  @db.Text
+
+  // Metadata
+  metadata              Json?    // Additional flexible data
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([brandSlug])
+  @@index([verificationStatus])
+  @@index([isActive])
+  @@index([businessType])
+  @@map("vendor_profiles")
+}
+
+// Vendor Documents - Store uploaded verification documents
+model VendorDocument {
+  id                    String   @id @default(uuid())
+  vendorId              String
+
+  type                  VendorDocumentType
+  documentUrl           String   // S3/CDN URL
+  documentNumber        String?  // License number, etc.
+
+  status                DocumentVerificationStatus @default(PENDING)
+  rejectionReason       String?
+
+  expiryDate            DateTime?
+
+  uploadedAt            DateTime @default(now())
+  verifiedAt            DateTime?
+  verifiedBy            String?  // Admin user ID
+
+  @@index([vendorId])
+  @@index([type])
+  @@index([status])
+  @@map("vendor_documents")
+}
+
+// Vendor Payout - Track payments to vendors
+model VendorPayout {
+  id                    String   @id @default(uuid())
+  vendorId              String
+
+  amount                Decimal  @db.Decimal(12, 2)
+  currency              String   @default("AED")
+
+  // Period covered
+  periodStart           DateTime
+  periodEnd             DateTime
+
+  // Breakdown
+  totalSales            Decimal  @db.Decimal(12, 2)
+  platformCommission    Decimal  @db.Decimal(12, 2)
+  adjustments           Decimal  @default(0) @db.Decimal(12, 2) // Refunds, fees, etc.
+  netAmount             Decimal  @db.Decimal(12, 2) // After commission and adjustments
+
+  // Status
+  status                PayoutStatus @default(PENDING)
+
+  // Payment Details
+  paymentMethod         String?  // BANK_TRANSFER, etc.
+  transactionReference  String?
+  paidAt                DateTime?
+
+  // Metadata
+  orderIds              String[] // Orders included in this payout
+  invoiceUrl            String?  // Generated invoice PDF
+  notes                 String?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([vendorId])
+  @@index([status])
+  @@index([periodStart])
+  @@index([periodEnd])
+  @@map("vendor_payouts")
+}
+
+// Vendor Review - Customer reviews for vendors
+model VendorReview {
+  id                    String   @id @default(uuid())
+  vendorId              String
+  userId                String   // Customer who left review
+  orderId               String   // Order this review is for
+
+  rating                Int      // 1-5 stars
+
+  // Review Aspects
+  productQualityRating  Int?     // 1-5
+  communicationRating   Int?     // 1-5
+  shippingSpeedRating   Int?     // 1-5
+
+  comment               String?  @db.Text
+
+  // Status
+  isApproved            Boolean  @default(false)
+  isPublished           Boolean  @default(true)
+
+  // Vendor Response
+  vendorResponse        String?  @db.Text
+  respondedAt           DateTime?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([userId, orderId]) // One review per order per user
+  @@index([vendorId])
+  @@index([rating])
+  @@index([createdAt])
+  @@map("vendor_reviews")
+}
+
+// Vendor Analytics - Daily aggregated stats
+model VendorAnalytics {
+  id                    String   @id @default(uuid())
+  vendorId              String
+  date                  DateTime @db.Date
+
+  // Order Metrics
+  ordersCount           Int      @default(0)
+  ordersValue           Decimal  @default(0) @db.Decimal(12, 2)
+
+  // Product Metrics
+  productsViewed        Int      @default(0)
+  productsAddedToCart   Int      @default(0)
+  productsSold          Int      @default(0)
+
+  // Financial
+  revenue               Decimal  @default(0) @db.Decimal(12, 2)
+  commission            Decimal  @default(0) @db.Decimal(12, 2)
+  refunds               Decimal  @default(0) @db.Decimal(12, 2)
+
+  // Customer Metrics
+  uniqueCustomers       Int      @default(0)
+  returningCustomers    Int      @default(0)
+
+  createdAt             DateTime @default(now())
+
+  @@unique([vendorId, date])
+  @@index([vendorId])
+  @@index([date])
+  @@map("vendor_analytics")
+}
+
+// Enums for Vendor System
+
+enum VendorBusinessType {
+  INDIVIDUAL          // Individual seller
+  COMPANY             // Registered company
+  DISTRIBUTOR         // Brand distributor
+  MANUFACTURER        // Product manufacturer
+}
+
+enum VendorVerificationStatus {
+  PENDING             // Awaiting verification
+  UNDER_REVIEW        // Admin is reviewing
+  VERIFIED            // Approved and verified
+  REJECTED            // Verification rejected
+  RESUBMISSION_REQUIRED // Needs to resubmit documents
+}
+
+enum VendorDocumentType {
+  TRADE_LICENSE       // Trade license
+  TAX_REGISTRATION    // VAT/TRN certificate
+  ID_CARD             // Emirates ID / Passport
+  BANK_STATEMENT      // Bank account proof
+  BRAND_AUTHORIZATION // Brand authorization letter (for distributors)
+  OTHER               // Other documents
+}
+
+enum DocumentVerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PayoutStatus {
+  PENDING             // Not yet processed
+  PROCESSING          // Being processed
+  COMPLETED           // Successfully paid
+  FAILED              // Payment failed
+  CANCELLED           // Cancelled by admin
+}
