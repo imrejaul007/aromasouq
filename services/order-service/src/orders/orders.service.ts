@@ -22,13 +22,15 @@ export class OrdersService {
   async create(createOrderDto: CreateOrderDto) {
     const {
       userId,
+      userEmail,
+      userPhone,
       items,
-      shippingAddressId,
-      billingAddressId,
+      shippingAddress,
+      billingAddress,
       paymentMethod,
       couponCode,
       walletAmount,
-      notes,
+      customerNotes,
     } = createOrderDto;
 
     // 1. Validate items and fetch product details
@@ -54,12 +56,14 @@ export class OrdersService {
         data: {
           orderNumber,
           userId,
+          userEmail,
+          userPhone,
           status: OrderStatus.PENDING,
-          shippingAddressId,
-          billingAddressId: billingAddressId || shippingAddressId,
+          shippingAddress: shippingAddress || {},
+          billingAddress: billingAddress || shippingAddress || {},
           paymentMethod,
-          paymentStatus: 'PENDING',
-          notes,
+          paymentStatus: 'pending',
+          customerNotes,
 
           // Totals
           subtotal: calculations.subtotal,
@@ -69,6 +73,9 @@ export class OrdersService {
           walletUsed: calculations.walletUsed,
           cashbackEarned: calculations.cashbackEarned,
           total: calculations.total,
+
+          // Applied coupons
+          appliedCoupons: couponCode ? { couponCode, discount: calculations.discount } : null,
 
           // Timeline
           timeline: {
@@ -83,10 +90,12 @@ export class OrdersService {
       // Create sub-orders for each vendor
       for (const [vendorId, vendorItems] of Object.entries(vendorSplits)) {
         const subOrderNumber = await this.generateSubOrderNumber(orderNumber);
-        const subOrderTotal = vendorItems.reduce(
-          (sum, item) => sum + item.price * item.quantity,
+        const subOrderSubtotal = vendorItems.reduce(
+          (sum, item) => sum + item.subtotal,
           0,
         );
+        const subOrderTax = vendorItems.reduce((sum, item) => sum + item.tax, 0);
+        const subOrderTotal = subOrderSubtotal + subOrderTax;
 
         // Calculate commission (default 10%)
         const commissionRate = 10;
@@ -98,8 +107,12 @@ export class OrdersService {
             subOrderNumber,
             orderId: createdOrder.id,
             vendorId,
-            vendorName: vendorItems[0].vendorName, // Assume all items have vendor name
+            vendorName: vendorItems[0].vendorName,
             status: OrderStatus.PENDING,
+            subtotal: subOrderSubtotal,
+            tax: subOrderTax,
+            shippingFee: 0, // Would be calculated per vendor
+            total: subOrderTotal,
             commissionRate,
             commissionAmount,
             vendorPayout,
@@ -111,15 +124,11 @@ export class OrdersService {
                 productName: item.productName,
                 productSlug: item.productSlug,
                 productImage: item.productImage,
-                variantId: item.variantId,
-                variantName: item.variantName,
                 unitPrice: item.unitPrice,
                 quantity: item.quantity,
                 subtotal: item.subtotal,
                 tax: item.tax,
                 total: item.total,
-                vendorId: item.vendorId,
-                vendorName: item.vendorName,
               })),
             },
 
@@ -133,21 +142,21 @@ export class OrdersService {
         });
       }
 
-      // Apply coupon if provided
+      // Track coupon usage if provided
       if (couponCode && calculations.couponId) {
-        await tx.orderCoupon.create({
+        await tx.couponUsage.create({
           data: {
-            orderId: createdOrder.id,
             couponId: calculations.couponId,
-            couponCode,
-            discountAmount: calculations.discount,
+            userId,
+            orderId: createdOrder.id,
+            discount: calculations.discount,
           },
         });
 
         // Increment coupon usage
         await tx.coupon.update({
           where: { id: calculations.couponId },
-          data: { usedCount: { increment: 1 } },
+          data: { currentUses: { increment: 1 } },
         });
       }
 
@@ -168,7 +177,7 @@ export class OrdersService {
     for (const item of items) {
       // In production, fetch product details from Product Service
       // For now, we'll use the provided data
-      const unitPrice = item.price;
+      const unitPrice = item.price || item.unitPrice;
       const quantity = item.quantity;
       const subtotal = unitPrice * quantity;
       const tax = subtotal * 0.05; // 5% VAT
@@ -176,14 +185,16 @@ export class OrdersService {
 
       validatedItems.push({
         productId: item.productId,
-        productSku: item.productSku,
-        productName: `Product ${item.productSku}`, // Would come from Product Service
-        productSlug: item.productSku.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-        productImage: null,
+        productSku: item.productSku || `SKU-${item.productId}`,
+        productName: item.productName || `Product ${item.productId}`,
+        productSlug:
+          item.productSlug ||
+          (item.productName || item.productId)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-'),
+        productImage: item.productImage || null,
         vendorId: item.vendorId,
-        vendorName: `Vendor ${item.vendorId}`, // Would come from User Service
-        variantId: item.variantId,
-        variantName: null,
+        vendorName: item.vendorName || `Vendor ${item.vendorId}`,
         unitPrice,
         quantity,
         subtotal,
@@ -309,11 +320,11 @@ export class OrdersService {
     }
 
     const now = new Date();
-    if (now < coupon.startDate || now > coupon.endDate) {
+    if (now < coupon.validFrom || now > coupon.validUntil) {
       throw new BadRequestException('Coupon has expired');
     }
 
-    if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
+    if (coupon.maxUses && coupon.currentUses >= coupon.maxUses) {
       throw new BadRequestException('Coupon usage limit reached');
     }
 
@@ -325,16 +336,13 @@ export class OrdersService {
 
     // Calculate discount
     let discountAmount = 0;
-    if (coupon.discountType === 'PERCENTAGE') {
-      discountAmount = (subtotal * coupon.discountValue.toNumber()) / 100;
-      if (coupon.maxDiscountAmount) {
-        discountAmount = Math.min(
-          discountAmount,
-          coupon.maxDiscountAmount.toNumber(),
-        );
+    if (coupon.type === 'PERCENTAGE') {
+      discountAmount = (subtotal * coupon.value.toNumber()) / 100;
+      if (coupon.maxDiscount) {
+        discountAmount = Math.min(discountAmount, coupon.maxDiscount.toNumber());
       }
-    } else {
-      discountAmount = coupon.discountValue.toNumber();
+    } else if (coupon.type === 'FIXED_AMOUNT') {
+      discountAmount = coupon.value.toNumber();
     }
 
     return {
@@ -414,19 +422,14 @@ export class OrdersService {
             items: true,
             timeline: {
               orderBy: {
-                timestamp: 'desc',
+                createdAt: 'desc',
               },
             },
           },
         },
         timeline: {
           orderBy: {
-            timestamp: 'desc',
-          },
-        },
-        coupons: {
-          include: {
-            coupon: true,
+            createdAt: 'desc',
           },
         },
       },

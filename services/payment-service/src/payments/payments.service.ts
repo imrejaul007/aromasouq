@@ -11,7 +11,7 @@ import {
   ConfirmPaymentDto,
   CreateRefundDto,
 } from './dto/create-payment.dto';
-import { PaymentProvider, PaymentStatus, TransactionType } from '@prisma/client';
+import { PaymentProvider, PaymentStatus, PaymentMethod } from '@prisma/client';
 
 @Injectable()
 export class PaymentsService {
@@ -23,19 +23,37 @@ export class PaymentsService {
   ) {}
 
   async createPaymentIntent(dto: CreatePaymentIntentDto) {
-    const { orderId, userId, amount, currency = 'AED', provider, metadata } = dto;
+    const {
+      orderId,
+      orderNumber,
+      userId,
+      userEmail,
+      amount,
+      subtotal,
+      tax,
+      shippingFee,
+      discount = 0,
+      walletUsed = 0,
+      currency = 'AED',
+      provider,
+      method,
+      metadata,
+    } = dto;
 
     // Validate amount
     if (amount <= 0) {
       throw new BadRequestException('Amount must be greater than 0');
     }
 
+    // Calculate amount to pay (after wallet)
+    const amountToPay = amount - walletUsed;
+
     let intentData: any;
 
     // Create payment intent with provider
     if (provider === PaymentProvider.STRIPE) {
       intentData = await this.stripeService.createPaymentIntent({
-        amount,
+        amount: amountToPay,
         currency,
         orderId,
         metadata,
@@ -55,10 +73,19 @@ export class PaymentsService {
       data: {
         intentId: intentData.intentId,
         orderId,
+        orderNumber,
         userId,
+        userEmail,
         amount,
+        subtotal,
+        tax,
+        shippingFee,
+        discount,
+        walletUsed,
+        amountToPay,
         currency,
         provider,
+        method,
         status: PaymentStatus.PENDING,
         clientSecret: intentData.clientSecret,
         requiresAction: intentData.status === 'requires_action',
@@ -74,6 +101,7 @@ export class PaymentsService {
       clientSecret: paymentIntent.clientSecret,
       status: paymentIntent.status,
       amount: paymentIntent.amount,
+      amountToPay: paymentIntent.amountToPay,
       currency: paymentIntent.currency,
     };
   }
@@ -100,7 +128,7 @@ export class PaymentsService {
     // Update payment intent status
     const status =
       confirmedData.status === 'succeeded'
-        ? PaymentStatus.COMPLETED
+        ? PaymentStatus.SUCCEEDED
         : confirmedData.status === 'requires_action'
         ? PaymentStatus.REQUIRES_ACTION
         : PaymentStatus.FAILED;
@@ -109,20 +137,20 @@ export class PaymentsService {
       where: { id: paymentIntent.id },
       data: {
         status,
-        confirmedAt: status === PaymentStatus.COMPLETED ? new Date() : null,
+        succeededAt: status === PaymentStatus.SUCCEEDED ? new Date() : null,
       },
     });
 
     // Create transaction record if successful
-    if (status === PaymentStatus.COMPLETED) {
+    if (status === PaymentStatus.SUCCEEDED) {
       await this.createTransaction({
         paymentIntentId: paymentIntent.id,
         orderId: paymentIntent.orderId,
         userId: paymentIntent.userId,
-        amount: paymentIntent.amount,
+        amount: paymentIntent.amount.toNumber(),
         currency: paymentIntent.currency,
         provider: paymentIntent.provider,
-        type: TransactionType.PAYMENT,
+        method: paymentIntent.method,
       });
 
       this.logger.log(`Payment completed for order ${paymentIntent.orderId}`);
@@ -136,6 +164,17 @@ export class PaymentsService {
     };
   }
 
+  private async generateTransactionNumber(): Promise<string> {
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+
+    const count = await this.prisma.transaction.count();
+    const sequence = String(count + 1).padStart(4, '0');
+
+    return `TXN-${year}${month}-${sequence}`;
+  }
+
   private async createTransaction(data: {
     paymentIntentId: string;
     orderId: string;
@@ -143,18 +182,27 @@ export class PaymentsService {
     amount: number;
     currency: string;
     provider: PaymentProvider;
-    type: TransactionType;
+    method: PaymentMethod;
   }) {
+    const transactionNumber = await this.generateTransactionNumber();
+    const platformFee = data.amount * 0.025; // 2.5% platform fee
+    const gatewayFee = data.amount * 0.029 + 0.3; // Stripe fees ~2.9% + 30 cents
+    const netAmount = data.amount - platformFee - gatewayFee;
+
     return this.prisma.transaction.create({
       data: {
+        transactionNumber,
         paymentIntentId: data.paymentIntentId,
         orderId: data.orderId,
         userId: data.userId,
         amount: data.amount,
         currency: data.currency,
         provider: data.provider,
-        type: data.type,
-        status: PaymentStatus.COMPLETED,
+        method: data.method,
+        status: PaymentStatus.SUCCEEDED,
+        platformFee,
+        gatewayFee,
+        netAmount,
       },
     });
   }
@@ -172,17 +220,13 @@ export class PaymentsService {
       throw new NotFoundException('Transaction not found');
     }
 
-    if (transaction.type !== TransactionType.PAYMENT) {
-      throw new BadRequestException('Can only refund payment transactions');
+    if (transaction.status !== PaymentStatus.SUCCEEDED) {
+      throw new BadRequestException('Transaction is not in a refundable state');
     }
 
-    // Check if already refunded
-    const existingRefund = await this.prisma.refund.findFirst({
-      where: { transactionId, status: PaymentStatus.COMPLETED },
-    });
-
-    if (existingRefund) {
-      throw new BadRequestException('Transaction already refunded');
+    // Check if already fully refunded
+    if (transaction.isFullyRefunded) {
+      throw new BadRequestException('Transaction already fully refunded');
     }
 
     // Validate refund amount
@@ -202,19 +246,26 @@ export class PaymentsService {
       });
     }
 
+    // Generate refund number
+    const refundNumber = await this.generateRefundNumber();
+
     // Create refund record
     const refund = await this.prisma.refund.create({
       data: {
-        refundId: refundData.refundId,
+        refundNumber,
+        gatewayRefundId: refundData.refundId,
+        paymentIntentId: transaction.paymentIntentId,
         transactionId,
         orderId: transaction.orderId,
         userId: transaction.userId,
         amount: refundAmount,
         currency: transaction.currency,
         provider: transaction.provider,
-        reason,
-        status: PaymentStatus.COMPLETED,
+        reason: dto.reason || 'REQUESTED_BY_CUSTOMER',
+        reasonDescription: reason,
+        status: 'SUCCEEDED',
         processedAt: new Date(),
+        succeededAt: new Date(),
       },
     });
 
@@ -222,11 +273,23 @@ export class PaymentsService {
 
     return {
       id: refund.id,
-      refundId: refund.refundId,
+      refundNumber: refund.refundNumber,
+      gatewayRefundId: refund.gatewayRefundId,
       amount: refund.amount,
       status: refund.status,
       orderId: refund.orderId,
     };
+  }
+
+  private async generateRefundNumber(): Promise<string> {
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+
+    const count = await this.prisma.refund.count();
+    const sequence = String(count + 1).padStart(4, '0');
+
+    return `REF-${year}${month}-${sequence}`;
   }
 
   async getPaymentIntent(id: string) {
@@ -322,12 +385,12 @@ export class PaymentsService {
       where: { intentId: paymentIntent.id },
     });
 
-    if (intent && intent.status !== PaymentStatus.COMPLETED) {
+    if (intent && intent.status !== PaymentStatus.SUCCEEDED) {
       await this.prisma.paymentIntent.update({
         where: { id: intent.id },
         data: {
-          status: PaymentStatus.COMPLETED,
-          confirmedAt: new Date(),
+          status: PaymentStatus.SUCCEEDED,
+          succeededAt: new Date(),
         },
       });
 

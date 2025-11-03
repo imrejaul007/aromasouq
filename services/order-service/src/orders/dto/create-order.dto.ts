@@ -5,7 +5,8 @@ import {
   IsEnum,
   IsNumber,
   ValidateNested,
-  IsBoolean,
+  IsEmail,
+  IsObject,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PaymentMethod } from '@prisma/client';
@@ -14,21 +15,24 @@ export class CreateOrderDto {
   @IsString()
   userId: string;
 
+  @IsEmail()
+  userEmail: string;
+
   @IsString()
   @IsOptional()
-  cartId?: string;
+  userPhone?: string;
 
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
   items: OrderItemDto[];
 
-  @IsString()
-  shippingAddressId: string;
+  @IsObject()
+  shippingAddress: any; // Json field - address object
 
-  @IsString()
+  @IsObject()
   @IsOptional()
-  billingAddressId?: string;
+  billingAddress?: any; // Json field - address object
 
   @IsEnum(PaymentMethod)
   paymentMethod: PaymentMethod;
@@ -43,11 +47,7 @@ export class CreateOrderDto {
 
   @IsString()
   @IsOptional()
-  notes?: string;
-
-  @IsBoolean()
-  @IsOptional()
-  saveAddress?: boolean;
+  customerNotes?: string;
 }
 
 export class OrderItemDto {
