@@ -22,7 +22,7 @@ async function bootstrap() {
   // Set global prefix
   app.setGlobalPrefix('api');
 
-  await app.listen(process.env.PORT ?? 3300);
-  console.log(`Order Service running on port ${process.env.PORT ?? 3300}`);
+  await app.listen(process.env.PORT ?? 3400);
+  console.log(`Notification Service running on port ${process.env.PORT ?? 3400}`);
 }
 bootstrap();

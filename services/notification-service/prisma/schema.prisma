@@ -1,0 +1,365 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// NOTIFICATION TEMPLATES
+// ============================================
+
+model NotificationTemplate {
+  id          String               @id @default(uuid())
+  key         String               @unique // e.g., 'order-confirmed', 'shipment-delivered'
+  name        String
+  description String?
+
+  // Channel templates
+  emailSubject     String?
+  emailBody        String?         @db.Text
+  emailHtml        String?         @db.Text
+
+  smsBody          String?         @db.Text
+
+  pushTitle        String?
+  pushBody         String?         @db.Text
+  pushData         Json?
+
+  // Template variables (e.g., {{orderNumber}}, {{customerName}})
+  variables        Json             @default("[]")
+
+  // Active status
+  isActive         Boolean          @default(true)
+
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  notifications    Notification[]
+
+  @@index([key])
+  @@index([isActive])
+}
+
+// ============================================
+// NOTIFICATION RECORDS
+// ============================================
+
+model Notification {
+  id               String               @id @default(uuid())
+
+  // Template reference
+  templateId       String
+  template         NotificationTemplate @relation(fields: [templateId], references: [id])
+
+  // Recipient
+  userId           String
+  email            String?
+  phone            String?
+  deviceToken      String?
+
+  // Channels
+  channels         NotificationChannel[]
+
+  // Status
+  status           NotificationStatus   @default(PENDING)
+
+  // Rendered content (with variables replaced)
+  emailSubject     String?
+  emailBody        String?              @db.Text
+  emailHtml        String?              @db.Text
+  smsBody          String?              @db.Text
+  pushTitle        String?
+  pushBody         String?              @db.Text
+  pushData         Json?
+
+  // Delivery tracking
+  emailLogs        EmailLog[]
+  smsLogs          SMSLog[]
+  pushLogs         PushLog[]
+
+  // Metadata
+  metadata         Json?
+
+  // Scheduling
+  scheduledAt      DateTime?
+  sentAt           DateTime?
+
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([createdAt])
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum NotificationStatus {
+  PENDING
+  QUEUED
+  PROCESSING
+  SENT
+  PARTIALLY_SENT
+  FAILED
+  CANCELLED
+}
+
+// ============================================
+// EMAIL DELIVERY TRACKING
+// ============================================
+
+model EmailLog {
+  id               String          @id @default(uuid())
+
+  notificationId   String
+  notification     Notification    @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  // Recipient
+  to               String
+  cc               String?
+  bcc              String?
+
+  // Email details
+  subject          String
+  body             String          @db.Text
+  html             String?         @db.Text
+
+  // Provider details
+  provider         EmailProvider
+  messageId        String?         @unique
+
+  // Status
+  status           EmailStatus     @default(PENDING)
+
+  // Delivery events
+  sentAt           DateTime?
+  deliveredAt      DateTime?
+  openedAt         DateTime?
+  clickedAt        DateTime?
+  bouncedAt        DateTime?
+  complainedAt     DateTime?
+
+  // Error tracking
+  errorMessage     String?         @db.Text
+  retryCount       Int             @default(0)
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([notificationId])
+  @@index([messageId])
+  @@index([status])
+  @@index([to])
+  @@index([createdAt])
+}
+
+enum EmailProvider {
+  SENDGRID
+  NODEMAILER
+  AWS_SES
+}
+
+enum EmailStatus {
+  PENDING
+  QUEUED
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  COMPLAINED
+  FAILED
+}
+
+// ============================================
+// SMS DELIVERY TRACKING
+// ============================================
+
+model SMSLog {
+  id               String          @id @default(uuid())
+
+  notificationId   String
+  notification     Notification    @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  // Recipient
+  to               String
+
+  // SMS details
+  body             String          @db.Text
+
+  // Provider details
+  provider         SMSProvider
+  messageId        String?         @unique
+
+  // Status
+  status           SMSStatus       @default(PENDING)
+
+  // Delivery events
+  sentAt           DateTime?
+  deliveredAt      DateTime?
+  failedAt         DateTime?
+
+  // Cost tracking
+  segments         Int             @default(1)
+  cost             Decimal?        @db.Decimal(10, 4)
+
+  // Error tracking
+  errorMessage     String?         @db.Text
+  retryCount       Int             @default(0)
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([notificationId])
+  @@index([messageId])
+  @@index([status])
+  @@index([to])
+  @@index([createdAt])
+}
+
+enum SMSProvider {
+  TWILIO
+  AWS_SNS
+  NEXMO
+}
+
+enum SMSStatus {
+  PENDING
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  UNDELIVERED
+}
+
+// ============================================
+// PUSH NOTIFICATION TRACKING
+// ============================================
+
+model PushLog {
+  id               String          @id @default(uuid())
+
+  notificationId   String
+  notification     Notification    @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  // Recipient
+  deviceToken      String
+  userId           String
+
+  // Push details
+  title            String
+  body             String          @db.Text
+  data             Json?
+
+  // Provider details
+  provider         PushProvider
+  messageId        String?         @unique
+
+  // Status
+  status           PushStatus      @default(PENDING)
+
+  // Delivery events
+  sentAt           DateTime?
+  deliveredAt      DateTime?
+  failedAt         DateTime?
+
+  // Error tracking
+  errorMessage     String?         @db.Text
+  retryCount       Int             @default(0)
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([notificationId])
+  @@index([messageId])
+  @@index([status])
+  @@index([userId])
+  @@index([deviceToken])
+  @@index([createdAt])
+}
+
+enum PushProvider {
+  FIREBASE
+  APNS
+  ONE_SIGNAL
+}
+
+enum PushStatus {
+  PENDING
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  INVALID_TOKEN
+}
+
+// ============================================
+// USER NOTIFICATION PREFERENCES
+// ============================================
+
+model NotificationPreference {
+  id               String          @id @default(uuid())
+  userId           String          @unique
+
+  // Channel preferences
+  emailEnabled     Boolean         @default(true)
+  smsEnabled       Boolean         @default(true)
+  pushEnabled      Boolean         @default(true)
+
+  // Category preferences
+  orderUpdates     Boolean         @default(true)
+  promotions       Boolean         @default(true)
+  newsletters      Boolean         @default(false)
+  announcements    Boolean         @default(true)
+  accountAlerts    Boolean         @default(true)
+
+  // Quiet hours (for push notifications)
+  quietHoursStart  String?         // e.g., "22:00"
+  quietHoursEnd    String?         // e.g., "08:00"
+  timezone         String          @default("Asia/Dubai")
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([userId])
+}
+
+// ============================================
+// WEBHOOK PROCESSING
+// ============================================
+
+model NotificationWebhook {
+  id               String          @id @default(uuid())
+
+  // Provider
+  provider         String          // 'sendgrid', 'twilio', 'firebase'
+  event            String          // 'delivered', 'bounced', 'clicked', etc.
+
+  // Webhook data
+  rawPayload       Json
+  signature        String?
+  verified         Boolean         @default(false)
+
+  // Processing
+  processed        Boolean         @default(false)
+  processedAt      DateTime?
+
+  // Related log
+  messageId        String?
+
+  createdAt        DateTime        @default(now())
+
+  @@index([provider])
+  @@index([event])
+  @@index([messageId])
+  @@index([processed])
+  @@index([createdAt])
+}
