@@ -347,6 +347,9 @@ export class Product {
   @Prop()
   shortDescription?: string;
 
+  @Prop({ index: true })
+  primaryVendorId?: string; // Owner vendor ID (links to VendorProfile in user-service)
+
   @Prop({ type: Brand, required: true })
   brand: Brand;
 
@@ -422,3 +425,6 @@ ProductSchema.index({ 'taxonomy.mood': 1 });
 ProductSchema.index({ 'taxonomy.fulfillmentType': 1 });
 ProductSchema.index({ 'attributes.projectionRating': 1 });
 ProductSchema.index({ 'pricing.cashbackRate': -1 });
+
+// Vendor ownership index
+ProductSchema.index({ primaryVendorId: 1 });

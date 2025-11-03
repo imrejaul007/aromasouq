@@ -752,4 +752,258 @@ export class ProductsService {
     await this.elasticsearchService.bulkIndex(products as any);
     return { indexed: products.length };
   }
+
+  // ==================== VENDOR-SPECIFIC METHODS ====================
+
+  // Get all products for a specific vendor
+  async getVendorProducts(
+    vendorId: string,
+    options: {
+      search?: string;
+      status?: 'active' | 'inactive' | 'outOfStock';
+      page?: number;
+      limit?: number;
+    } = {},
+  ): Promise<{ data: Product[]; pagination: any }> {
+    const { search, status, page = 1, limit = 20 } = options;
+    const skip = (page - 1) * limit;
+
+    const filter: any = { primaryVendorId: vendorId };
+
+    // Status filter
+    if (status === 'active') {
+      filter['flags.active'] = true;
+      filter['flags.outOfStock'] = false;
+    } else if (status === 'inactive') {
+      filter['flags.active'] = false;
+    } else if (status === 'outOfStock') {
+      filter['flags.outOfStock'] = true;
+    }
+
+    // Search filter
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { sku: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      this.productModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).exec(),
+      this.productModel.countDocuments(filter),
+    ]);
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  // Get single product by vendor (with ownership check)
+  async getVendorProduct(vendorId: string, productId: string): Promise<Product> {
+    const product = await this.productModel.findOne({
+      _id: productId,
+      primaryVendorId: vendorId,
+    }).exec();
+
+    if (!product) {
+      throw new NotFoundException('Product not found or you do not have access to it');
+    }
+
+    return product;
+  }
+
+  // Create product as vendor
+  async createAsVendor(vendorId: string, createProductDto: CreateProductDto): Promise<Product> {
+    // Check if SKU already exists
+    const existingSku = await this.productModel.findOne({
+      sku: createProductDto.sku,
+    });
+    if (existingSku) {
+      throw new ConflictException(`Product with SKU ${createProductDto.sku} already exists`);
+    }
+
+    // Check if slug already exists
+    const existingSlug = await this.productModel.findOne({
+      slug: createProductDto.slug,
+    });
+    if (existingSlug) {
+      throw new ConflictException(`Product with slug ${createProductDto.slug} already exists`);
+    }
+
+    const product = new this.productModel({
+      ...createProductDto,
+      primaryVendorId: vendorId,
+      stats: {
+        viewsTotal: 0,
+        views30d: 0,
+        salesTotal: 0,
+        sales30d: 0,
+        ratingAvg: 0,
+        ratingCount: 0,
+        conversionRate: 0,
+      },
+      flags: {
+        active: true,
+        featured: false,
+        newArrival: true,
+        bestSeller: false,
+        lowStock: false,
+        outOfStock: false,
+      },
+    });
+
+    const savedProduct = await product.save();
+
+    // Index in Elasticsearch
+    await this.elasticsearchService.indexProduct(savedProduct as any);
+
+    return savedProduct;
+  }
+
+  // Update product as vendor (partial update)
+  async updateAsVendor(
+    vendorId: string,
+    productId: string,
+    updateData: any,
+  ): Promise<Product> {
+    const product = await this.productModel.findOne({
+      _id: productId,
+      primaryVendorId: vendorId,
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found or you do not have access to it');
+    }
+
+    // Apply updates
+    Object.assign(product, updateData);
+    const updated = await product.save();
+
+    // Re-index in Elasticsearch
+    await this.elasticsearchService.indexProduct(updated as any);
+
+    return updated;
+  }
+
+  // Update stock for vendor's product
+  async updateVendorStock(
+    vendorId: string,
+    productId: string,
+    stock: number,
+  ): Promise<Product> {
+    const product = await this.productModel.findOne({
+      _id: productId,
+      primaryVendorId: vendorId,
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found or you do not have access to it');
+    }
+
+    // Update stock in vendors array if vendor exists
+    const vendorIndex = product.vendors.findIndex((v) => v.vendorId === vendorId);
+    if (vendorIndex >= 0) {
+      product.vendors[vendorIndex].stock = stock;
+    } else {
+      // Add vendor to vendors array if not exists
+      product.vendors.push({
+        vendorId,
+        vendorName: 'Vendor', // TODO: Fetch vendor name from user-service
+        price: product.pricing.retail.amount,
+        stock,
+        fulfillmentType: product.taxonomy.fulfillmentType,
+        deliveryDays: 2,
+        isDefault: true,
+      } as any);
+    }
+
+    // Update stock flags
+    const totalStock = product.vendors.reduce((sum, vendor) => sum + vendor.stock, 0);
+    if (totalStock === 0) {
+      product.flags.outOfStock = true;
+      product.flags.lowStock = false;
+    } else if (totalStock < 10) {
+      product.flags.lowStock = true;
+      product.flags.outOfStock = false;
+    } else {
+      product.flags.lowStock = false;
+      product.flags.outOfStock = false;
+    }
+
+    const updated = await product.save();
+
+    // Re-index in Elasticsearch
+    await this.elasticsearchService.indexProduct(updated as any);
+
+    return updated;
+  }
+
+  // Soft delete (deactivate) product as vendor
+  async deleteAsVendor(vendorId: string, productId: string): Promise<{ message: string }> {
+    const product = await this.productModel.findOne({
+      _id: productId,
+      primaryVendorId: vendorId,
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found or you do not have access to it');
+    }
+
+    product.flags.active = false;
+    await product.save();
+
+    // Remove from Elasticsearch
+    await this.elasticsearchService.deleteProduct(productId);
+
+    return { message: 'Product deactivated successfully' };
+  }
+
+  // Get vendor product statistics
+  async getVendorProductStats(vendorId: string): Promise<any> {
+    const products = await this.productModel.find({ primaryVendorId: vendorId }).exec();
+
+    const totalProducts = products.length;
+    const activeProducts = products.filter((p) => p.flags.active).length;
+    const outOfStock = products.filter((p) => p.flags.outOfStock).length;
+    const lowStock = products.filter((p) => p.flags.lowStock).length;
+
+    const totalViews = products.reduce((sum, p) => sum + p.stats.viewsTotal, 0);
+    const totalSales = products.reduce((sum, p) => sum + p.stats.salesTotal, 0);
+    const averageRating = products.length > 0
+      ? products.reduce((sum, p) => sum + p.stats.ratingAvg, 0) / products.length
+      : 0;
+
+    const topProducts = products
+      .sort((a, b) => b.stats.salesTotal - a.stats.salesTotal)
+      .slice(0, 5)
+      .map((p) => ({
+        id: p._id,
+        name: p.name,
+        sku: p.sku,
+        sales: p.stats.salesTotal,
+        revenue: p.stats.salesTotal * p.pricing.retail.amount,
+      }));
+
+    return {
+      overview: {
+        totalProducts,
+        activeProducts,
+        outOfStock,
+        lowStock,
+      },
+      performance: {
+        totalViews,
+        totalSales,
+        averageRating: averageRating.toFixed(2),
+      },
+      topProducts,
+    };
+  }
 }
