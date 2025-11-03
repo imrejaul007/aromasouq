@@ -80,6 +80,11 @@ export class ProductsController {
     return this.productsService.getSimilarProducts(id, limit);
   }
 
+  @Get(':id/similar-enhanced')
+  getSimilarEnhanced(@Param('id') id: string, @Query('limit') limit?: number) {
+    return this.productsService.getSimilarProductsEnhanced(id, limit);
+  }
+
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateProductDto: UpdateProductDto) {
     return this.productsService.update(id, updateProductDto);
@@ -106,5 +111,77 @@ export class ProductsController {
   @Post('bulk/prices')
   bulkUpdatePrices(@Body() updates: Array<{ id: string; price: number }>) {
     return this.productsService.bulkUpdatePrices(updates);
+  }
+
+  // NEW: Mood-based endpoints
+  @Get('mood/:mood')
+  getByMood(@Param('mood') mood: string, @Query('limit') limit?: number) {
+    return this.productsService.getByMood(mood, limit);
+  }
+
+  @Get('moods/multiple')
+  getByMultipleMoods(@Query('moods') moods: string, @Query('limit') limit?: number) {
+    const moodArray = moods.split(',');
+    return this.productsService.getByMultipleMoods(moodArray, limit);
+  }
+
+  // NEW: Cashback endpoints
+  @Get('cashback/high')
+  getHighCashback(@Query('minRate') minRate?: number, @Query('limit') limit?: number) {
+    return this.productsService.getHighCashback(minRate, limit);
+  }
+
+  // NEW: Projection endpoints
+  @Get('projection/strong')
+  getStrongProjection(@Query('minRating') minRating?: number, @Query('limit') limit?: number) {
+    return this.productsService.getStrongProjection(minRating, limit);
+  }
+
+  // NEW: Fulfillment type endpoints
+  @Get('fulfillment/:type')
+  getByFulfillmentType(
+    @Param('type') type: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.productsService.getByFulfillmentType(type, page, limit);
+  }
+
+  @Get('wholesale/products')
+  getWholesaleProducts(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.productsService.getWholesaleProducts(page, limit);
+  }
+
+  @Get('manufacturing/products')
+  getManufacturingProducts(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.productsService.getManufacturingProducts(page, limit);
+  }
+
+  @Get('raw-materials/products')
+  getRawMaterials(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.productsService.getRawMaterials(page, limit);
+  }
+
+  // ELASTICSEARCH ENDPOINTS
+
+  @Get('elastic/search')
+  elasticSearch(@Query() searchDto: SearchProductDto) {
+    return this.productsService.elasticSearch(searchDto);
+  }
+
+  @Get('elastic/aggregations')
+  getAggregations(@Query() filters: any) {
+    return this.productsService.getAggregations(filters);
+  }
+
+  @Get('elastic/autocomplete')
+  autocomplete(@Query('field') field: string, @Query('text') text: string, @Query('size') size?: number) {
+    return this.productsService.autocomplete(field, text, size);
+  }
+
+  @Post('elastic/bulk-index')
+  @HttpCode(HttpStatus.OK)
+  bulkIndexToElasticsearch() {
+    return this.productsService.bulkIndexToElasticsearch();
   }
 }

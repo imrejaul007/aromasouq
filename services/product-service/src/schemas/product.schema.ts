@@ -36,6 +36,9 @@ export class Taxonomy {
   @Prop({ type: [String] })
   occasion: string[]; // 'office', 'party', 'date', 'daily', 'wedding', 'ramadan', 'eid', 'gift'
 
+  @Prop({ type: [String] })
+  mood: string[]; // 'romantic', 'confident', 'fresh', 'mysterious', 'elegant', 'casual', 'powerful', 'seductive', 'playful'
+
   @Prop()
   oudType?: string; // 'dehn_al_oud', 'cambodian', 'indian', 'thai', 'laotian', 'malaysian', 'mukhallat', 'incense', 'spray', 'luxury_extract'
 
@@ -44,6 +47,9 @@ export class Taxonomy {
 
   @Prop()
   collection?: string;
+
+  @Prop({ required: true })
+  fulfillmentType: string; // 'retail', 'wholesale', 'manufacturing', 'raw_material', 'packaging'
 }
 
 @Schema({ _id: false })
@@ -52,10 +58,13 @@ export class Attributes {
   volume: string; // "100ml", "50ml"
 
   @Prop({ required: true })
-  longevityHours: number;
+  longevityHours: number; // 2-24 hours
 
   @Prop({ required: true })
   projection: string; // 'soft', 'moderate', 'strong', 'very_strong'
+
+  @Prop({ required: true, min: 1, max: 10 })
+  projectionRating: number; // 1-10 numeric rating for filtering
 
   @Prop({ type: [String] })
   seasons: string[]; // 'spring', 'summer', 'fall', 'winter', 'all_season'
@@ -132,6 +141,9 @@ export class Pricing {
     currency: string;
     validUntil?: Date;
   };
+
+  @Prop({ default: 0, min: 0, max: 100 })
+  cashbackRate: number; // Cashback percentage (0-100), default 2%
 }
 
 @Schema({ _id: false })
@@ -174,12 +186,54 @@ export class Media {
 }
 
 @Schema({ _id: false })
+export class VideoContent {
+  @Prop({ required: true })
+  url: string;
+
+  @Prop()
+  thumbnail?: string;
+
+  @Prop()
+  duration?: number; // in seconds
+
+  @Prop()
+  type?: string; // 'product_demo', 'review', 'unboxing', 'tutorial'
+}
+
+@Schema({ _id: false })
+export class UGCVideo extends VideoContent {
+  @Prop({ required: true })
+  creatorId: string;
+
+  @Prop({ required: true })
+  creatorName: string;
+
+  @Prop()
+  creatorHandle?: string;
+
+  @Prop({ default: 0 })
+  views: number;
+
+  @Prop({ default: 0 })
+  likes: number;
+
+  @Prop({ default: false })
+  verified: boolean;
+
+  @Prop()
+  uploadedAt?: Date;
+}
+
+@Schema({ _id: false })
 export class ProductMedia {
   @Prop({ type: [Media], required: true })
   images: Media[];
 
-  @Prop({ type: [Media] })
-  videos?: Media[];
+  @Prop({ type: [VideoContent] })
+  videos?: VideoContent[];
+
+  @Prop({ type: [UGCVideo] })
+  ugcVideos?: UGCVideo[];
 
   @Prop()
   arModel?: string;
@@ -362,3 +416,9 @@ ProductSchema.index({
   'scent.middleNotes': 'text',
   'scent.baseNotes': 'text',
 });
+
+// Indexes for new blueprint fields
+ProductSchema.index({ 'taxonomy.mood': 1 });
+ProductSchema.index({ 'taxonomy.fulfillmentType': 1 });
+ProductSchema.index({ 'attributes.projectionRating': 1 });
+ProductSchema.index({ 'pricing.cashbackRate': -1 });

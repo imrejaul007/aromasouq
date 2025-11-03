@@ -52,6 +52,10 @@ export class TaxonomyDto {
   @IsOptional()
   occasion?: string[];
 
+  @IsArray()
+  @IsOptional()
+  mood?: string[];
+
   @IsString()
   @IsOptional()
   oudType?: string;
@@ -63,6 +67,10 @@ export class TaxonomyDto {
   @IsString()
   @IsOptional()
   collection?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  fulfillmentType: string;
 }
 
 export class AttributesDto {
@@ -78,6 +86,11 @@ export class AttributesDto {
   @IsString()
   @IsNotEmpty()
   projection: string;
+
+  @IsNumber()
+  @Min(1)
+  @Max(10)
+  projectionRating: number;
 
   @IsArray()
   @IsOptional()
@@ -173,6 +186,12 @@ export class PricingDto {
     currency: string;
     validUntil?: Date;
   };
+
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  cashbackRate?: number;
 }
 
 export class ProductVendorDto {
@@ -222,6 +241,51 @@ export class MediaDto {
   height?: number;
 }
 
+export class VideoContentDto {
+  @IsUrl()
+  url: string;
+
+  @IsString()
+  @IsOptional()
+  thumbnail?: string;
+
+  @IsNumber()
+  @IsOptional()
+  duration?: number;
+
+  @IsString()
+  @IsOptional()
+  type?: string;
+}
+
+export class UGCVideoDto extends VideoContentDto {
+  @IsString()
+  @IsNotEmpty()
+  creatorId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  creatorName: string;
+
+  @IsString()
+  @IsOptional()
+  creatorHandle?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  views?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  likes?: number;
+
+  @IsBoolean()
+  @IsOptional()
+  verified?: boolean;
+}
+
 export class ProductMediaDto {
   @IsArray()
   @ValidateNested({ each: true })
@@ -231,9 +295,15 @@ export class ProductMediaDto {
 
   @IsArray()
   @ValidateNested({ each: true })
-  @Type(() => MediaDto)
+  @Type(() => VideoContentDto)
   @IsOptional()
-  videos?: MediaDto[];
+  videos?: VideoContentDto[];
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UGCVideoDto)
+  @IsOptional()
+  ugcVideos?: UGCVideoDto[];
 
   @IsString()
   @IsOptional()

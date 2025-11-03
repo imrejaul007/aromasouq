@@ -43,6 +43,10 @@ export class SearchProductDto {
   occasion?: string[];
 
   @IsOptional()
+  @IsArray()
+  mood?: string[];
+
+  @IsOptional()
   @IsString()
   oudType?: string;
 
@@ -56,7 +60,32 @@ export class SearchProductDto {
 
   @IsOptional()
   @IsString()
-  sortBy?: string; // price_asc, price_desc, rating, sales, newest
+  fulfillmentType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(1)
+  @Max(10)
+  minProjectionRating?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(1)
+  @Max(10)
+  maxProjectionRating?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  @Max(100)
+  minCashbackRate?: number;
+
+  @IsOptional()
+  @IsString()
+  sortBy?: string; // price_asc, price_desc, rating, sales, newest, cashback, relevance
 
   @IsOptional()
   @IsNumber()

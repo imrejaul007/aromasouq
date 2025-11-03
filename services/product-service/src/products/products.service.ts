@@ -10,11 +10,13 @@ import { Product, ProductDocument } from '../schemas/product.schema';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { SearchProductDto } from './dto/search-product.dto';
+import { ElasticsearchService } from '../elasticsearch/elasticsearch.service';
 
 @Injectable()
 export class ProductsService {
   constructor(
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
+    private readonly elasticsearchService: ElasticsearchService,
   ) {}
 
   async create(createProductDto: CreateProductDto): Promise<Product> {
@@ -55,7 +57,12 @@ export class ProductsService {
       },
     });
 
-    return product.save();
+    const savedProduct = await product.save();
+
+    // Index in Elasticsearch
+    await this.elasticsearchService.indexProduct(savedProduct as any);
+
+    return savedProduct;
   }
 
   async findAll(page = 1, limit = 20): Promise<{ data: Product[]; pagination: any }> {
@@ -134,9 +141,14 @@ export class ProductsService {
       minPrice,
       maxPrice,
       occasion,
+      mood,
       oudType,
       concentration,
       region,
+      fulfillmentType,
+      minProjectionRating,
+      maxProjectionRating,
+      minCashbackRate,
       sortBy = 'newest',
       page = 1,
       limit = 20,
@@ -170,6 +182,11 @@ export class ProductsService {
       filter['taxonomy.occasion'] = { $in: occasion };
     }
 
+    // NEW: Mood filter
+    if (mood && mood.length > 0) {
+      filter['taxonomy.mood'] = { $in: mood };
+    }
+
     if (oudType) {
       filter['taxonomy.oudType'] = oudType;
     }
@@ -180,6 +197,11 @@ export class ProductsService {
 
     if (region) {
       filter['taxonomy.region'] = region;
+    }
+
+    // NEW: Fulfillment type filter
+    if (fulfillmentType) {
+      filter['taxonomy.fulfillmentType'] = fulfillmentType;
     }
 
     // Brand filter
@@ -198,6 +220,22 @@ export class ProductsService {
       }
     }
 
+    // NEW: Projection rating range filter
+    if (minProjectionRating !== undefined || maxProjectionRating !== undefined) {
+      filter['attributes.projectionRating'] = {};
+      if (minProjectionRating !== undefined) {
+        filter['attributes.projectionRating'].$gte = minProjectionRating;
+      }
+      if (maxProjectionRating !== undefined) {
+        filter['attributes.projectionRating'].$lte = maxProjectionRating;
+      }
+    }
+
+    // NEW: Cashback rate filter
+    if (minCashbackRate !== undefined) {
+      filter['pricing.cashbackRate'] = { $gte: minCashbackRate };
+    }
+
     // Sorting
     let sort: any = {};
     switch (sortBy) {
@@ -212,6 +250,9 @@ export class ProductsService {
         break;
       case 'sales':
         sort = { 'stats.salesTotal': -1 };
+        break;
+      case 'cashback':
+        sort = { 'pricing.cashbackRate': -1 };
         break;
       case 'newest':
       default:
@@ -268,6 +309,9 @@ export class ProductsService {
       throw new NotFoundException(`Product with ID ${id} not found`);
     }
 
+    // Update in Elasticsearch
+    await this.elasticsearchService.updateProduct(id, updateProductDto as any);
+
     return product;
   }
 
@@ -283,6 +327,9 @@ export class ProductsService {
       'flags.active': false,
     });
 
+    // Update in Elasticsearch
+    await this.elasticsearchService.updateProduct(id, { flags: { active: false } } as any);
+
     return { message: `Product ${product.name} has been deactivated` };
   }
 
@@ -292,6 +339,9 @@ export class ProductsService {
     if (!product) {
       throw new NotFoundException(`Product with ID ${id} not found`);
     }
+
+    // Delete from Elasticsearch
+    await this.elasticsearchService.deleteProduct(id);
 
     return { message: `Product ${product.name} has been permanently deleted` };
   }
@@ -409,5 +459,297 @@ export class ProductsService {
 
     const result = await this.productModel.bulkWrite(bulkOps);
     return { modified: result.modifiedCount };
+  }
+
+  // NEW: Get products by mood
+  async getByMood(mood: string, limit = 20): Promise<Product[]> {
+    return this.productModel
+      .find({
+        'flags.active': true,
+        'taxonomy.mood': mood
+      })
+      .sort({ 'stats.ratingAvg': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  // NEW: Get high cashback products
+  async getHighCashback(minRate = 5, limit = 20): Promise<Product[]> {
+    return this.productModel
+      .find({
+        'flags.active': true,
+        'pricing.cashbackRate': { $gte: minRate }
+      })
+      .sort({ 'pricing.cashbackRate': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  // NEW: Get products by fulfillment type
+  async getByFulfillmentType(fulfillmentType: string, page = 1, limit = 20): Promise<{ data: Product[]; pagination: any }> {
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.productModel
+        .find({
+          'taxonomy.fulfillmentType': fulfillmentType,
+          'flags.active': true
+        })
+        .sort({ 'stats.salesTotal': -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.productModel.countDocuments({
+        'taxonomy.fulfillmentType': fulfillmentType,
+        'flags.active': true
+      }),
+    ]);
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  // NEW: Get products with strong projection
+  async getStrongProjection(minRating = 7, limit = 20): Promise<Product[]> {
+    return this.productModel
+      .find({
+        'flags.active': true,
+        'attributes.projectionRating': { $gte: minRating }
+      })
+      .sort({ 'attributes.projectionRating': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  // NEW: Enhanced similar products with mood and projection matching
+  async getSimilarProductsEnhanced(productId: string, limit = 5): Promise<Product[]> {
+    const product = await this.productModel.findById(productId);
+
+    if (!product) {
+      throw new NotFoundException(`Product with ID ${productId} not found`);
+    }
+
+    // Find products with similar scent families, type, AND mood
+    const filter: any = {
+      _id: { $ne: productId },
+      'flags.active': true,
+      'taxonomy.scentFamily': { $in: product.taxonomy.scentFamily },
+    };
+
+    // Add mood matching if product has mood tags
+    if (product.taxonomy.mood && product.taxonomy.mood.length > 0) {
+      filter['taxonomy.mood'] = { $in: product.taxonomy.mood };
+    }
+
+    // Add projection rating similarity (within ±2 points)
+    if (product.attributes.projectionRating) {
+      filter['attributes.projectionRating'] = {
+        $gte: Math.max(1, product.attributes.projectionRating - 2),
+        $lte: Math.min(10, product.attributes.projectionRating + 2),
+      };
+    }
+
+    return this.productModel
+      .find(filter)
+      .sort({ 'stats.ratingAvg': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  // NEW: Get products by multiple moods (perfect for "vibe shopping")
+  async getByMultipleMoods(moods: string[], limit = 20): Promise<Product[]> {
+    return this.productModel
+      .find({
+        'flags.active': true,
+        'taxonomy.mood': { $all: moods } // Product must have ALL specified moods
+      })
+      .sort({ 'stats.ratingAvg': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  // NEW: Get wholesale products
+  async getWholesaleProducts(page = 1, limit = 20): Promise<{ data: Product[]; pagination: any }> {
+    return this.getByFulfillmentType('wholesale', page, limit);
+  }
+
+  // NEW: Get manufacturing products
+  async getManufacturingProducts(page = 1, limit = 20): Promise<{ data: Product[]; pagination: any }> {
+    return this.getByFulfillmentType('manufacturing', page, limit);
+  }
+
+  // NEW: Get raw materials
+  async getRawMaterials(page = 1, limit = 20): Promise<{ data: Product[]; pagination: any }> {
+    return this.getByFulfillmentType('raw_material', page, limit);
+  }
+
+  // ELASTICSEARCH METHODS
+
+  // Advanced Elasticsearch search with fuzzy matching and boosting
+  async elasticSearch(searchDto: SearchProductDto): Promise<{ data: any[]; pagination: any; aggregations?: any }> {
+    const {
+      q,
+      type,
+      scentFamily,
+      gender,
+      brand,
+      priceSegment,
+      minPrice,
+      maxPrice,
+      occasion,
+      mood,
+      oudType,
+      concentration,
+      region,
+      fulfillmentType,
+      minProjectionRating,
+      maxProjectionRating,
+      minCashbackRate,
+      sortBy = 'newest',
+      page = 1,
+      limit = 20,
+    } = searchDto;
+
+    const must: any[] = [{ term: { 'flags.active': true } }];
+    const should: any[] = [];
+    const filter: any[] = [];
+
+    // Text search with fuzzy matching and boosting
+    if (q) {
+      should.push(
+        { match: { name: { query: q, boost: 3, fuzziness: 'AUTO' } } },
+        { match: { description: { query: q, boost: 2, fuzziness: 'AUTO' } } },
+        { match: { 'brand.name': { query: q, boost: 2.5, fuzziness: 'AUTO' } } },
+        { match: { 'scent.topNotes': { query: q, boost: 1.5 } } },
+        { match: { 'scent.middleNotes': { query: q, boost: 1.5 } } },
+        { match: { 'scent.baseNotes': { query: q, boost: 1.5 } } },
+      );
+    }
+
+    // Filters
+    if (type && type.length > 0) filter.push({ terms: { 'taxonomy.type': type } });
+    if (scentFamily && scentFamily.length > 0) filter.push({ terms: { 'taxonomy.scentFamily': scentFamily } });
+    if (gender && gender.length > 0) filter.push({ terms: { 'taxonomy.gender': gender } });
+    if (brand) filter.push({ term: { 'brand.slug': brand } });
+    if (priceSegment) filter.push({ term: { 'taxonomy.priceSegment': priceSegment } });
+    if (occasion && occasion.length > 0) filter.push({ terms: { 'taxonomy.occasion': occasion } });
+    if (mood && mood.length > 0) filter.push({ terms: { 'taxonomy.mood': mood } });
+    if (oudType) filter.push({ term: { 'taxonomy.oudType': oudType } });
+    if (concentration) filter.push({ term: { 'taxonomy.concentration': concentration } });
+    if (region) filter.push({ term: { 'taxonomy.region': region } });
+    if (fulfillmentType) filter.push({ term: { 'taxonomy.fulfillmentType': fulfillmentType } });
+
+    // Price range
+    if (minPrice !== undefined || maxPrice !== undefined) {
+      const priceRange: any = {};
+      if (minPrice !== undefined) priceRange.gte = minPrice;
+      if (maxPrice !== undefined) priceRange.lte = maxPrice;
+      filter.push({ range: { 'pricing.retail.amount': priceRange } });
+    }
+
+    // Projection rating range
+    if (minProjectionRating !== undefined || maxProjectionRating !== undefined) {
+      const projectionRange: any = {};
+      if (minProjectionRating !== undefined) projectionRange.gte = minProjectionRating;
+      if (maxProjectionRating !== undefined) projectionRange.lte = maxProjectionRating;
+      filter.push({ range: { 'attributes.projectionRating': projectionRange } });
+    }
+
+    // Cashback rate
+    if (minCashbackRate !== undefined) {
+      filter.push({ range: { 'pricing.cashbackRate': { gte: minCashbackRate } } });
+    }
+
+    // Sorting
+    let sort: any[] = [];
+    switch (sortBy) {
+      case 'price_asc':
+        sort = [{ 'pricing.retail.amount': { order: 'asc' } }];
+        break;
+      case 'price_desc':
+        sort = [{ 'pricing.retail.amount': { order: 'desc' } }];
+        break;
+      case 'rating':
+        sort = [{ 'stats.ratingAvg': { order: 'desc' } }];
+        break;
+      case 'sales':
+        sort = [{ 'stats.salesTotal': { order: 'desc' } }];
+        break;
+      case 'cashback':
+        sort = [{ 'pricing.cashbackRate': { order: 'desc' } }];
+        break;
+      case 'relevance':
+        sort = [{ _score: { order: 'desc' } }];
+        break;
+      case 'newest':
+      default:
+        sort = [{ createdAt: { order: 'desc' } }];
+        break;
+    }
+
+    const from = (page - 1) * limit;
+
+    const query: any = {
+      bool: {
+        must,
+        filter,
+      },
+    };
+
+    if (should.length > 0) {
+      query.bool.should = should;
+      query.bool.minimum_should_match = 1;
+    }
+
+    const body: any = {
+      from,
+      size: limit,
+      query,
+      sort,
+    };
+
+    const result: any = await this.elasticsearchService.search(body);
+
+    const hits = result.hits.hits.map((hit: any) => ({
+      ...hit._source,
+      _id: hit._id,
+      _score: hit._score,
+    }));
+
+    const total = typeof result.hits.total === 'number' ? result.hits.total : result.hits.total.value;
+
+    return {
+      data: hits,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  // Get filter aggregations
+  async getAggregations(filters: any = {}): Promise<any> {
+    return this.elasticsearchService.getAggregations(filters);
+  }
+
+  // Autocomplete suggestions
+  async autocomplete(field: string, text: string, size = 10): Promise<any> {
+    return this.elasticsearchService.suggest(field, text, size);
+  }
+
+  // Bulk index all products to Elasticsearch
+  async bulkIndexToElasticsearch(): Promise<{ indexed: number }> {
+    const products = await this.productModel.find({}).exec();
+    await this.elasticsearchService.bulkIndex(products as any);
+    return { indexed: products.length };
   }
 }

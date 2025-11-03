@@ -148,8 +148,248 @@ model RefreshToken {
   createdAt   DateTime @default(now())
 
   @@index([userId])
-  @@index([token])
   @@map("refresh_tokens")
+}
+
+// ==================== REWARDS SYSTEM ====================
+
+// Coin Wallet - Tracks all coin types for user
+model CoinWallet {
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+
+  // Coin Balances
+  brandedCoins          Int      @default(0) // Per-brand coins (stored as total, breakdown in BrandedCoinBalance)
+  universalCoins        Int      @default(0) // Platform-wide coins
+  promoCoins            Int      @default(0) // Campaign-based coins
+
+  // Cashback (stored as AED Fils - 1 AED = 100 Fils)
+  cashbackBalance       Int      @default(0) // In Fils
+  lifetimeCashbackEarned Int     @default(0) // In Fils
+
+  // Stats
+  totalCoinsEarned      Int      @default(0)
+  totalCoinsRedeemed    Int      @default(0)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("coin_wallets")
+}
+
+// Branded Coin Balance - Breakdown per brand
+model BrandedCoinBalance {
+  id                    String   @id @default(uuid())
+  userId                String
+  brandId               String   // Product brand ID
+  brandName             String   // Denormalized for quick display
+  brandSlug             String
+
+  balance               Int      @default(0)
+  lifetimeEarned        Int      @default(0)
+  lifetimeRedeemed      Int      @default(0)
+
+  expiresAt             DateTime? // Coins can expire
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([userId, brandId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("branded_coin_balances")
+}
+
+// Coin Transaction - Every earn/redeem tracked
+model CoinTransaction {
+  id                    String              @id @default(uuid())
+  userId                String
+
+  type                  CoinTransactionType
+  coinType              CoinType
+  amount                Int                 // Positive for earn, negative for redeem
+
+  // For branded coins
+  brandId               String?
+  brandName             String?
+
+  // Reason/Source
+  reason                CoinEarnReason?     // For earnings
+  redemptionType        CoinRedemptionType? // For redemptions
+
+  // Reference tracking
+  orderId               String?
+  productId             String?
+  reviewId              String?
+  referralId            String?
+  campaignId            String?
+
+  // Balance tracking
+  balanceBefore         Int
+  balanceAfter          Int
+
+  // Metadata
+  description           String
+  metadata              Json?               // Additional data
+
+  // Expiry for earned coins
+  expiresAt             DateTime?
+
+  status                CoinTransactionStatus @default(COMPLETED)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([userId])
+  @@index([type])
+  @@index([coinType])
+  @@index([createdAt])
+  @@index([expiresAt])
+  @@map("coin_transactions")
+}
+
+// Cashback Transaction - Separate tracking for cashback
+model CashbackTransaction {
+  id                    String   @id @default(uuid())
+  userId                String
+
+  type                  CashbackType
+  amount                Int      // In Fils (100 Fils = 1 AED)
+  amountAED             Decimal  @db.Decimal(10, 2) // Readable format
+
+  // Source
+  orderId               String?
+  orderNumber           String?
+  productId             String?
+  productName           String?
+  cashbackRate          Decimal? @db.Decimal(5, 2) // Percentage
+
+  // Balance tracking
+  balanceBefore         Int      // In Fils
+  balanceAfter          Int      // In Fils
+
+  description           String
+  status                CashbackStatus @default(PENDING)
+
+  // Cashback can be pending until order fulfillment
+  pendingUntil          DateTime?
+  creditedAt            DateTime?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([orderId])
+  @@index([createdAt])
+  @@map("cashback_transactions")
+}
+
+// Reward Campaign - Admin creates campaigns
+model RewardCampaign {
+  id                    String   @id @default(uuid())
+
+  name                  String
+  description           String
+  type                  CampaignType
+
+  // Rewards
+  coinType              CoinType
+  coinAmount            Int?
+  cashbackRate          Decimal? @db.Decimal(5, 2)
+
+  // Eligibility
+  minPurchaseAmount     Decimal? @db.Decimal(10, 2)
+  brandIds              String[] // Empty = all brands
+  productIds            String[] // Empty = all products
+  userSegment           String?  // 'new', 'vip', 'inactive', etc.
+
+  // Validity
+  startDate             DateTime
+  endDate               DateTime
+  maxRedemptions        Int?     // Null = unlimited
+  maxRedemptionsPerUser Int?     @default(1)
+
+  // Stats
+  totalRedemptions      Int      @default(0)
+
+  isActive              Boolean  @default(true)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([startDate])
+  @@index([endDate])
+  @@map("reward_campaigns")
+}
+
+// Enums for Rewards System
+
+enum CoinTransactionType {
+  EARN
+  REDEEM
+  EXPIRE
+  BONUS
+  REFUND
+}
+
+enum CoinType {
+  BRANDED      // Per-brand coins
+  UNIVERSAL    // Platform-wide
+  PROMO        // Campaign-based
+}
+
+enum CoinEarnReason {
+  PURCHASE
+  REVIEW
+  REFERRAL
+  SIGNUP_BONUS
+  BIRTHDAY
+  CAMPAIGN
+  ADMIN_BONUS
+  SOCIAL_SHARE
+  FIRST_ORDER
+}
+
+enum CoinRedemptionType {
+  DISCOUNT
+  FREE_PRODUCT
+  FREE_SHIPPING
+  CASHBACK_CONVERSION
+}
+
+enum CoinTransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  EXPIRED
+  REVERSED
+}
+
+enum CashbackType {
+  EARN
+  REDEEM
+  EXPIRE
+}
+
+enum CashbackStatus {
+  PENDING
+  CREDITED
+  REDEEMED
+  EXPIRED
+  CANCELLED
+}
+
+enum CampaignType {
+  SIGNUP_BONUS
+  PURCHASE_REWARD
+  REFERRAL
+  SEASONAL
+  FLASH
+  VIP
+  BIRTHDAY
 }
 
 // Email Verification Token
