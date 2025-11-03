@@ -9,6 +9,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { RewardsIntegrationService } from '../rewards-integration/rewards-integration.service';
 
 @Injectable()
 export class OrdersService {
@@ -17,6 +18,7 @@ export class OrdersService {
   constructor(
     private prisma: PrismaService,
     private httpService: HttpService,
+    private rewardsIntegration: RewardsIntegrationService,
   ) {}
 
   async create(createOrderDto: CreateOrderDto) {
@@ -167,6 +169,13 @@ export class OrdersService {
     this.sendOrderNotifications(order.id, userId).catch((error) => {
       this.logger.error('Failed to send order notifications:', error.message);
     });
+
+    // 7. Award coins and create pending cashback (async)
+    this.awardRewardsForOrder(order.id, userId, orderNumber, calculations, validatedItems).catch(
+      (error) => {
+        this.logger.error('Failed to award rewards:', error.message);
+      },
+    );
 
     return this.findOne(order.id);
   }
@@ -371,6 +380,55 @@ export class OrdersService {
     }
   }
 
+  private async awardRewardsForOrder(
+    orderId: string,
+    userId: string,
+    orderNumber: string,
+    calculations: any,
+    validatedItems: any[],
+  ) {
+    try {
+      // 1. Award Coins (branded + universal)
+      const coinItems = validatedItems.map((item) => ({
+        productId: item.productId,
+        productName: item.productName,
+        brandId: item.vendorId, // Using vendorId as brandId for now
+        brandName: item.vendorName,
+        brandSlug: item.productSlug.split('-')[0], // Extract brand from slug
+        subtotal: item.subtotal,
+      }));
+
+      await this.rewardsIntegration.earnCoinsOnOrder({
+        userId,
+        orderId,
+        orderNumber,
+        orderTotal: calculations.subtotal,
+        items: coinItems,
+      });
+
+      // 2. Create Pending Cashback (assuming products have cashback rates)
+      // In production, fetch cashback rates from Product Service
+      const cashbackItems = validatedItems.map((item) => ({
+        productId: item.productId,
+        productName: item.productName,
+        cashbackRate: 2.0, // Default 2% - should come from product data
+        subtotal: item.subtotal,
+      }));
+
+      await this.rewardsIntegration.earnCashbackOnOrder({
+        userId,
+        orderId,
+        orderNumber,
+        items: cashbackItems,
+      });
+
+      this.logger.log(`Successfully awarded rewards for order ${orderNumber}`);
+    } catch (error) {
+      this.logger.error(`Failed to award rewards for order ${orderId}:`, error.message);
+      // Don't throw - rewards failure shouldn't block order creation
+    }
+  }
+
   async findAll(params?: {
     userId?: string;
     status?: OrderStatus;
@@ -458,6 +516,13 @@ export class OrdersService {
       },
     });
 
+    // Credit cashback when order is delivered
+    if (status === OrderStatus.DELIVERED) {
+      this.rewardsIntegration.creditCashbackOnDelivery(id).catch((error) => {
+        this.logger.error(`Failed to credit cashback for order ${id}:`, error.message);
+      });
+    }
+
     return updatedOrder;
   }
 
@@ -472,7 +537,7 @@ export class OrdersService {
       );
     }
 
-    return this.prisma.order.update({
+    const cancelledOrder = await this.prisma.order.update({
       where: { id },
       data: {
         status: OrderStatus.CANCELLED,
@@ -484,5 +549,12 @@ export class OrdersService {
         },
       },
     });
+
+    // Cancel pending cashback when order is cancelled
+    this.rewardsIntegration.cancelCashbackOnOrderCancel(id).catch((error) => {
+      this.logger.error(`Failed to cancel cashback for order ${id}:`, error.message);
+    });
+
+    return cancelledOrder;
   }
 }

@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { RewardsModule } from './rewards/rewards.module';
+import { SchedulerModule } from './scheduler/scheduler.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { RewardsModule } from './rewards/rewards.module';
     AuthModule,
     UsersModule,
     RewardsModule,
+    SchedulerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -2,9 +2,10 @@ import { Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
+import { RewardsIntegrationModule } from '../rewards-integration/rewards-integration.module';
 
 @Module({
-  imports: [HttpModule],
+  imports: [HttpModule, RewardsIntegrationModule],
   controllers: [OrdersController],
   providers: [OrdersService],
   exports: [OrdersService],
