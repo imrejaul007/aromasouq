@@ -8,6 +8,7 @@ import { UsersModule } from './users/users.module';
 import { RewardsModule } from './rewards/rewards.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { VendorsModule } from './vendors/vendors.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { VendorsModule } from './vendors/vendors.module';
     RewardsModule,
     SchedulerModule,
     VendorsModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],
