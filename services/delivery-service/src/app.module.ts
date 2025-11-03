@@ -5,6 +5,8 @@ import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { ShipmentsModule } from './shipments/shipments.module';
 import { CouriersModule } from './couriers/couriers.module';
+import { TrackingModule } from './tracking/tracking.module';
+import { ZonesModule } from './zones/zones.module';
 
 @Module({
   imports: [
@@ -14,6 +16,8 @@ import { CouriersModule } from './couriers/couriers.module';
     PrismaModule,
     ShipmentsModule,
     CouriersModule,
+    TrackingModule,
+    ZonesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
