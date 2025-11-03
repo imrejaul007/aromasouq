@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { RewardsModule } from './rewards/rewards.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
+import { VendorsModule } from './vendors/vendors.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { SchedulerModule } from './scheduler/scheduler.module';
     UsersModule,
     RewardsModule,
     SchedulerModule,
+    VendorsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

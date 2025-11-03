@@ -505,6 +505,12 @@ model VendorProfile {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
+  // Relations
+  documents             VendorDocument[]
+  payouts               VendorPayout[]
+  reviews               VendorReview[]
+  analytics             VendorAnalytics[]
+
   @@index([brandSlug])
   @@index([verificationStatus])
   @@index([isActive])
@@ -529,6 +535,9 @@ model VendorDocument {
   uploadedAt            DateTime @default(now())
   verifiedAt            DateTime?
   verifiedBy            String?  // Admin user ID
+
+  // Relations
+  vendor                VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
 
   @@index([vendorId])
   @@index([type])
@@ -570,6 +579,9 @@ model VendorPayout {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
+  // Relations
+  vendor                VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
   @@index([vendorId])
   @@index([status])
   @@index([periodStart])
@@ -604,6 +616,9 @@ model VendorReview {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
+  // Relations
+  vendor                VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
   @@unique([userId, orderId]) // One review per order per user
   @@index([vendorId])
   @@index([rating])
@@ -636,6 +651,9 @@ model VendorAnalytics {
   returningCustomers    Int      @default(0)
 
   createdAt             DateTime @default(now())
+
+  // Relations
+  vendor                VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
 
   @@unique([vendorId, date])
   @@index([vendorId])
