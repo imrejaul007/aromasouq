@@ -290,4 +290,65 @@ export class ProductsController {
   getOudProducts(@Query('page') page?: number, @Query('limit') limit?: number) {
     return this.productsService.getOudProducts(page, limit);
   }
+
+  // ==================== WEEK 7: AI & ADVANCED FEATURES ====================
+
+  @Get('ai/similar-with-score/:id')
+  findSimilarWithScore(@Param('id') id: string, @Query('limit') limit?: number) {
+    return this.productsService.findSimilarWithScore(id, limit);
+  }
+
+  @Post('ai/recommendations/:userId')
+  getPersonalizedRecommendations(
+    @Param('userId') userId: string,
+    @Body()
+    body: {
+      viewedProductIds?: string[];
+      purchasedProductIds?: string[];
+      preferredScentFamilies?: string[];
+      preferredMoods?: string[];
+      limit?: number;
+    },
+  ) {
+    return this.productsService.getPersonalizedRecommendations(userId, body);
+  }
+
+  @Get('ai/trending')
+  getTrendingProducts(@Query('limit') limit?: number) {
+    return this.productsService.getTrendingProducts(limit);
+  }
+
+  @Post('ai/complete-profile')
+  completeTheScentProfile(
+    @Body() body: { ownedProductIds: string[]; limit?: number },
+  ) {
+    return this.productsService.completeTheScentProfile(
+      body.ownedProductIds,
+      body.limit,
+    );
+  }
+
+  @Post('ai/smart-search')
+  smartSearch(
+    @Body()
+    body: {
+      query: string;
+      filters?: {
+        scentFamily?: string[];
+        mood?: string[];
+        priceRange?: { min: number; max: number };
+        rating?: number;
+      };
+      limit?: number;
+    },
+  ) {
+    return this.productsService.smartSearch(body.query, body.filters, body.limit);
+  }
+
+  @Post('ai/scent-twin')
+  findScentTwin(
+    @Body() body: { favoriteProductIds: string[]; limit?: number },
+  ) {
+    return this.productsService.findScentTwin(body.favoriteProductIds, body.limit);
+  }
 }

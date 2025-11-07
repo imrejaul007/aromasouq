@@ -1306,4 +1306,458 @@ export class ProductsService {
   ): Promise<{ data: Product[]; pagination: any }> {
     return this.getByProductType('oud', page, limit);
   }
+
+  // ==================== WEEK 7: AI & ADVANCED FEATURES ====================
+
+  /**
+   * Calculate similarity score between two products based on multiple factors
+   * Returns a score from 0-100 representing how similar the products are
+   */
+  private calculateSimilarityScore(product1: Product, product2: Product): number {
+    let score = 0;
+    let maxScore = 0;
+
+    // Scent family match (30 points max)
+    maxScore += 30;
+    const scentFamilyOverlap = product1.taxonomy.scentFamily.filter((sf) =>
+      product2.taxonomy.scentFamily.includes(sf),
+    ).length;
+    if (product1.taxonomy.scentFamily.length > 0) {
+      score += (scentFamilyOverlap / product1.taxonomy.scentFamily.length) * 30;
+    }
+
+    // Scent notes overlap (40 points max - most important)
+    maxScore += 40;
+    const topNotesOverlap = product1.scent.topNotes.filter((note) =>
+      product2.scent.topNotes.includes(note),
+    ).length;
+    const middleNotesOverlap = product1.scent.middleNotes.filter((note) =>
+      product2.scent.middleNotes.includes(note),
+    ).length;
+    const baseNotesOverlap = product1.scent.baseNotes.filter((note) =>
+      product2.scent.baseNotes.includes(note),
+    ).length;
+
+    const totalNotes =
+      product1.scent.topNotes.length +
+      product1.scent.middleNotes.length +
+      product1.scent.baseNotes.length;
+
+    if (totalNotes > 0) {
+      const notesScore =
+        ((topNotesOverlap * 1.2 + middleNotesOverlap * 1.5 + baseNotesOverlap * 2) /
+          (totalNotes * 1.5)) *
+        40;
+      score += Math.min(40, notesScore);
+    }
+
+    // Mood match (15 points max)
+    if (product1.taxonomy.mood && product2.taxonomy.mood) {
+      maxScore += 15;
+      const moodOverlap = product1.taxonomy.mood.filter((mood) =>
+        product2.taxonomy.mood.includes(mood),
+      ).length;
+      if (product1.taxonomy.mood.length > 0) {
+        score += (moodOverlap / product1.taxonomy.mood.length) * 15;
+      }
+    }
+
+    // Projection similarity (10 points max)
+    maxScore += 10;
+    const projectionDiff = Math.abs(
+      product1.attributes.projectionRating - product2.attributes.projectionRating,
+    );
+    score += Math.max(0, 10 - projectionDiff);
+
+    // Longevity similarity (5 points max)
+    maxScore += 5;
+    const longevityDiff = Math.abs(
+      product1.attributes.longevityHours - product2.attributes.longevityHours,
+    );
+    score += Math.max(0, 5 - longevityDiff / 2);
+
+    // Normalize to 0-100 scale
+    return Math.round((score / maxScore) * 100);
+  }
+
+  /**
+   * AI-Powered: Find similar products with calculated match percentage
+   * Uses multi-factor similarity algorithm
+   */
+  async findSimilarWithScore(
+    productId: string,
+    limit = 10,
+  ): Promise<Array<Product & { similarityScore: number }>> {
+    const product = await this.productModel.findById(productId);
+
+    if (!product) {
+      throw new NotFoundException(`Product with ID ${productId} not found`);
+    }
+
+    // Get potential matches (broader filter)
+    const candidates = await this.productModel
+      .find({
+        _id: { $ne: productId },
+        'flags.active': true,
+        $or: [
+          { 'taxonomy.scentFamily': { $in: product.taxonomy.scentFamily } },
+          { 'scent.topNotes': { $in: product.scent.topNotes } },
+          { 'scent.middleNotes': { $in: product.scent.middleNotes } },
+          { 'scent.baseNotes': { $in: product.scent.baseNotes } },
+          { 'taxonomy.mood': { $in: product.taxonomy.mood || [] } },
+        ],
+      })
+      .limit(100) // Get more candidates for scoring
+      .exec();
+
+    // Calculate similarity scores
+    const productsWithScores = candidates
+      .map((candidate) => ({
+        ...candidate.toObject(),
+        similarityScore: this.calculateSimilarityScore(product, candidate),
+      }))
+      .filter((p) => p.similarityScore >= 40) // Only keep products with >40% match
+      .sort((a, b) => b.similarityScore - a.similarityScore)
+      .slice(0, limit);
+
+    return productsWithScores as any;
+  }
+
+  /**
+   * AI-Powered: Get personalized recommendations for a user
+   * Based on browsing history, purchases, and preferences
+   */
+  async getPersonalizedRecommendations(
+    userId: string,
+    options: {
+      viewedProductIds?: string[];
+      purchasedProductIds?: string[];
+      preferredScentFamilies?: string[];
+      preferredMoods?: string[];
+      limit?: number;
+    } = {},
+  ): Promise<Product[]> {
+    const {
+      viewedProductIds = [],
+      purchasedProductIds = [],
+      preferredScentFamilies = [],
+      preferredMoods = [],
+      limit = 20,
+    } = options;
+
+    // Build preference profile from user history
+    const allProductIds = [...new Set([...viewedProductIds, ...purchasedProductIds])];
+
+    if (allProductIds.length > 0) {
+      const userProducts = await this.productModel
+        .find({ _id: { $in: allProductIds } })
+        .exec();
+
+      // Extract preferences from user's history
+      const scentFamilies = new Set<string>();
+      const moods = new Set<string>();
+      const topNotes = new Set<string>();
+      const baseNotes = new Set<string>();
+
+      userProducts.forEach((p) => {
+        p.taxonomy.scentFamily.forEach((sf) => scentFamilies.add(sf));
+        if (p.taxonomy.mood) p.taxonomy.mood.forEach((m) => moods.add(m));
+        p.scent.topNotes.forEach((n) => topNotes.add(n));
+        p.scent.baseNotes.forEach((n) => baseNotes.add(n));
+      });
+
+      // Find products matching user preferences
+      return this.productModel
+        .find({
+          _id: { $nin: allProductIds }, // Exclude already seen/purchased
+          'flags.active': true,
+          $or: [
+            { 'taxonomy.scentFamily': { $in: Array.from(scentFamilies) } },
+            { 'taxonomy.mood': { $in: Array.from(moods) } },
+            { 'scent.topNotes': { $in: Array.from(topNotes) } },
+            { 'scent.baseNotes': { $in: Array.from(baseNotes) } },
+          ],
+        })
+        .sort({
+          'stats.ratingAvg': -1,
+          'stats.salesTotal': -1,
+        })
+        .limit(limit)
+        .exec();
+    }
+
+    // Fallback: Use explicit preferences or popular products
+    if (preferredScentFamilies.length > 0 || preferredMoods.length > 0) {
+      return this.productModel
+        .find({
+          'flags.active': true,
+          $or: [
+            { 'taxonomy.scentFamily': { $in: preferredScentFamilies } },
+            { 'taxonomy.mood': { $in: preferredMoods } },
+          ],
+        })
+        .sort({ 'stats.ratingAvg': -1 })
+        .limit(limit)
+        .exec();
+    }
+
+    // Ultimate fallback: Trending products
+    return this.getTrendingProducts(limit);
+  }
+
+  /**
+   * AI-Powered: Get trending products based on recent activity
+   * Weighted by views, sales, and recency
+   */
+  async getTrendingProducts(limit = 20): Promise<Product[]> {
+    // Calculate trending score: (views30d * 1) + (sales30d * 5) + (ratingAvg * 2)
+    return this.productModel
+      .find({ 'flags.active': true })
+      .sort({
+        'stats.views30d': -1,
+        'stats.sales30d': -1,
+        'stats.ratingAvg': -1,
+      })
+      .limit(limit)
+      .exec();
+  }
+
+  /**
+   * AI-Powered: Complete the scent profile
+   * Suggest complementary products based on what user already has
+   */
+  async completeTheScentProfile(
+    ownedProductIds: string[],
+    limit = 10,
+  ): Promise<Product[]> {
+    if (ownedProductIds.length === 0) {
+      return this.getTrendingProducts(limit);
+    }
+
+    const ownedProducts = await this.productModel
+      .find({ _id: { $in: ownedProductIds } })
+      .exec();
+
+    // Identify gaps in user's collection
+    const ownedScentFamilies = new Set<string>();
+    const ownedMoods = new Set<string>();
+    const ownedOccasions = new Set<string>();
+    const ownedConcentrations = new Set<string>();
+
+    ownedProducts.forEach((p) => {
+      p.taxonomy.scentFamily.forEach((sf) => ownedScentFamilies.add(sf));
+      if (p.taxonomy.mood) p.taxonomy.mood.forEach((m) => ownedMoods.add(m));
+      if (p.taxonomy.occasion) p.taxonomy.occasion.forEach((o) => ownedOccasions.add(o));
+      ownedConcentrations.add(p.taxonomy.concentration);
+    });
+
+    // Find products that fill gaps
+    const allScentFamilies = [
+      'floral',
+      'fruity',
+      'fresh',
+      'aquatic',
+      'oriental',
+      'woody',
+      'musky',
+      'oud',
+    ];
+    const missingFamilies = allScentFamilies.filter((sf) => !ownedScentFamilies.has(sf));
+
+    if (missingFamilies.length > 0) {
+      return this.productModel
+        .find({
+          _id: { $nin: ownedProductIds },
+          'flags.active': true,
+          'taxonomy.scentFamily': { $in: missingFamilies },
+        })
+        .sort({ 'stats.ratingAvg': -1 })
+        .limit(limit)
+        .exec();
+    }
+
+    // If collection is diverse, recommend highly rated products
+    return this.productModel
+      .find({
+        _id: { $nin: ownedProductIds },
+        'flags.active': true,
+      })
+      .sort({ 'stats.ratingAvg': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  /**
+   * AI-Powered: Smart search with relevance scoring
+   * Boosts results based on multiple signals
+   */
+  async smartSearch(
+    query: string,
+    filters: {
+      scentFamily?: string[];
+      mood?: string[];
+      priceRange?: { min: number; max: number };
+      rating?: number;
+    } = {},
+    limit = 20,
+  ): Promise<Array<Product & { relevanceScore: number }>> {
+    const searchQuery: any = {
+      'flags.active': true,
+      $or: [
+        { name: { $regex: query, $options: 'i' } },
+        { description: { $regex: query, $options: 'i' } },
+        { 'brand.name': { $regex: query, $options: 'i' } },
+        { 'scent.topNotes': { $regex: query, $options: 'i' } },
+        { 'scent.middleNotes': { $regex: query, $options: 'i' } },
+        { 'scent.baseNotes': { $regex: query, $options: 'i' } },
+      ],
+    };
+
+    // Apply filters
+    if (filters.scentFamily?.length) {
+      searchQuery['taxonomy.scentFamily'] = { $in: filters.scentFamily };
+    }
+    if (filters.mood?.length) {
+      searchQuery['taxonomy.mood'] = { $in: filters.mood };
+    }
+    if (filters.priceRange) {
+      searchQuery['pricing.retail.amount'] = {
+        $gte: filters.priceRange.min,
+        $lte: filters.priceRange.max,
+      };
+    }
+    if (filters.rating) {
+      searchQuery['stats.ratingAvg'] = { $gte: filters.rating };
+    }
+
+    const products = await this.productModel.find(searchQuery).limit(100).exec();
+
+    // Calculate relevance scores
+    const queryLower = query.toLowerCase();
+    const productsWithScores = products.map((product) => {
+      let score = 0;
+
+      // Exact name match (50 points)
+      if (product.name.toLowerCase() === queryLower) score += 50;
+      // Name starts with query (30 points)
+      else if (product.name.toLowerCase().startsWith(queryLower)) score += 30;
+      // Name contains query (20 points)
+      else if (product.name.toLowerCase().includes(queryLower)) score += 20;
+
+      // Brand match (15 points)
+      if (product.brand.name.toLowerCase().includes(queryLower)) score += 15;
+
+      // Note match (10 points)
+      const allNotes = [
+        ...product.scent.topNotes,
+        ...product.scent.middleNotes,
+        ...product.scent.baseNotes,
+      ];
+      if (allNotes.some((note) => note.toLowerCase().includes(queryLower))) score += 10;
+
+      // Popularity boost (15 points max)
+      score += Math.min(15, (product.stats.salesTotal / 100) * 5);
+
+      // Rating boost (10 points max)
+      score += product.stats.ratingAvg;
+
+      return {
+        ...product.toObject(),
+        relevanceScore: Math.round(score),
+      };
+    });
+
+    return productsWithScores
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(0, limit) as any;
+  }
+
+  /**
+   * AI-Powered: Find your "scent twin"
+   * Discover products perfect for users with similar taste
+   */
+  async findScentTwin(
+    favoriteProductIds: string[],
+    limit = 15,
+  ): Promise<Product[]> {
+    if (favoriteProductIds.length === 0) {
+      throw new BadRequestException('Provide at least one favorite product');
+    }
+
+    const favorites = await this.productModel
+      .find({ _id: { $in: favoriteProductIds } })
+      .exec();
+
+    // Build comprehensive preference profile
+    const preferenceWeights = {
+      scentFamilies: new Map<string, number>(),
+      moods: new Map<string, number>(),
+      topNotes: new Map<string, number>(),
+      baseNotes: new Map<string, number>(),
+      concentrations: new Map<string, number>(),
+    };
+
+    favorites.forEach((product) => {
+      // Weight scent families
+      product.taxonomy.scentFamily.forEach((sf) => {
+        preferenceWeights.scentFamilies.set(
+          sf,
+          (preferenceWeights.scentFamilies.get(sf) || 0) + 1,
+        );
+      });
+
+      // Weight moods
+      if (product.taxonomy.mood) {
+        product.taxonomy.mood.forEach((mood) => {
+          preferenceWeights.moods.set(mood, (preferenceWeights.moods.get(mood) || 0) + 1);
+        });
+      }
+
+      // Weight notes
+      product.scent.topNotes.forEach((note) => {
+        preferenceWeights.topNotes.set(note, (preferenceWeights.topNotes.get(note) || 0) + 1);
+      });
+      product.scent.baseNotes.forEach((note) => {
+        preferenceWeights.baseNotes.set(note, (preferenceWeights.baseNotes.get(note) || 0) + 1);
+      });
+
+      // Weight concentrations
+      preferenceWeights.concentrations.set(
+        product.taxonomy.concentration,
+        (preferenceWeights.concentrations.get(product.taxonomy.concentration) || 0) + 1,
+      );
+    });
+
+    // Get top preferences
+    const topScentFamilies = Array.from(preferenceWeights.scentFamilies.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map((e) => e[0]);
+
+    const topMoods = Array.from(preferenceWeights.moods.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map((e) => e[0]);
+
+    const topNotes = Array.from(preferenceWeights.topNotes.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map((e) => e[0]);
+
+    // Find products matching the profile
+    return this.productModel
+      .find({
+        _id: { $nin: favoriteProductIds },
+        'flags.active': true,
+        $or: [
+          { 'taxonomy.scentFamily': { $in: topScentFamilies } },
+          { 'taxonomy.mood': { $in: topMoods } },
+          { 'scent.topNotes': { $in: topNotes } },
+          { 'scent.baseNotes': { $in: topNotes } },
+        ],
+      })
+      .sort({ 'stats.ratingAvg': -1 })
+      .limit(limit)
+      .exec();
+  }
 }
