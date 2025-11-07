@@ -1006,4 +1006,304 @@ export class ProductsService {
       topProducts,
     };
   }
+
+  // ==================== WEEK 2-3: ADDITIONAL SMART FILTERS ====================
+
+  async getByScentFamily(
+    scentFamily: string,
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.productModel
+        .find({
+          'flags.active': true,
+          'taxonomy.scentFamily': scentFamily,
+        })
+        .sort({ 'stats.salesTotal': -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.productModel.countDocuments({
+        'flags.active': true,
+        'taxonomy.scentFamily': scentFamily,
+      }),
+    ]);
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async getByOccasion(
+    occasion: string,
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.productModel
+        .find({
+          'flags.active': true,
+          'taxonomy.occasion': occasion,
+        })
+        .sort({ 'stats.salesTotal': -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.productModel.countDocuments({
+        'flags.active': true,
+        'taxonomy.occasion': occasion,
+      }),
+    ]);
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async getByConcentration(
+    concentration: string,
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.productModel
+        .find({
+          'flags.active': true,
+          'taxonomy.concentration': concentration,
+        })
+        .sort({ 'stats.salesTotal': -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.productModel.countDocuments({
+        'flags.active': true,
+        'taxonomy.concentration': concentration,
+      }),
+    ]);
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async getByOudType(
+    oudType: string,
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.productModel
+        .find({
+          'flags.active': true,
+          'taxonomy.oudType': oudType,
+        })
+        .sort({ 'stats.salesTotal': -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.productModel.countDocuments({
+        'flags.active': true,
+        'taxonomy.oudType': oudType,
+      }),
+    ]);
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async getBySeason(season: string, limit = 20): Promise<Product[]> {
+    return this.productModel
+      .find({
+        'flags.active': true,
+        'attributes.seasons': season,
+      })
+      .sort({ 'stats.salesTotal': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  async getByTimeOfDay(timeOfDay: string, limit = 20): Promise<Product[]> {
+    return this.productModel
+      .find({
+        'flags.active': true,
+        'attributes.timesOfDay': timeOfDay,
+      })
+      .sort({ 'stats.salesTotal': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  async getByLongevity(
+    minHours: number,
+    maxHours?: number,
+    limit = 20,
+  ): Promise<Product[]> {
+    const query: any = {
+      'flags.active': true,
+      'attributes.longevityHours': { $gte: minHours },
+    };
+
+    if (maxHours) {
+      query['attributes.longevityHours'].$lte = maxHours;
+    }
+
+    return this.productModel
+      .find(query)
+      .sort({ 'attributes.longevityHours': -1, 'stats.salesTotal': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  async findClones(brandName: string, limit = 20): Promise<Product[]> {
+    // Find products where the type includes 'clone' or 'similar_dna'
+    // and scent DNA is similar to the brand
+    return this.productModel
+      .find({
+        'flags.active': true,
+        $or: [
+          { 'taxonomy.type': { $in: ['clone', 'similar_dna'] } },
+          { 'scent.dnaSimilarTo': { $regex: brandName, $options: 'i' } },
+        ],
+      })
+      .sort({ 'scent.similarityScore': -1, 'stats.salesTotal': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  async findByScentDNA(
+    topNotes?: string[],
+    middleNotes?: string[],
+    baseNotes?: string[],
+    limit = 20,
+  ): Promise<Product[]> {
+    const query: any = { 'flags.active': true };
+
+    // Match products that have overlapping notes
+    const noteConditions: any[] = [];
+
+    if (topNotes && topNotes.length > 0) {
+      noteConditions.push({ 'scent.topNotes': { $in: topNotes } });
+    }
+
+    if (middleNotes && middleNotes.length > 0) {
+      noteConditions.push({ 'scent.middleNotes': { $in: middleNotes } });
+    }
+
+    if (baseNotes && baseNotes.length > 0) {
+      noteConditions.push({ 'scent.baseNotes': { $in: baseNotes } });
+    }
+
+    if (noteConditions.length > 0) {
+      query.$or = noteConditions;
+    }
+
+    return this.productModel
+      .find(query)
+      .sort({ 'stats.salesTotal': -1 })
+      .limit(limit)
+      .exec();
+  }
+
+  async getByProductType(
+    productType: string,
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.productModel
+        .find({
+          'flags.active': true,
+          'taxonomy.type': productType,
+        })
+        .sort({ 'stats.salesTotal': -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.productModel.countDocuments({
+        'flags.active': true,
+        'taxonomy.type': productType,
+      }),
+    ]);
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async getOriginalPerfumes(
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    return this.getByProductType('original', page, limit);
+  }
+
+  async getClonePerfumes(
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    return this.getByProductType('clone', page, limit);
+  }
+
+  async getNichePerfumes(
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    return this.getByProductType('niche', page, limit);
+  }
+
+  async getAttarProducts(
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    return this.getByProductType('attar', page, limit);
+  }
+
+  async getOudProducts(
+    page = 1,
+    limit = 20,
+  ): Promise<{ data: Product[]; pagination: any }> {
+    return this.getByProductType('oud', page, limit);
+  }
 }

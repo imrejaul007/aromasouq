@@ -184,4 +184,110 @@ export class ProductsController {
   bulkIndexToElasticsearch() {
     return this.productsService.bulkIndexToElasticsearch();
   }
+
+  // ==================== WEEK 2-3: ADDITIONAL SMART FILTERS ====================
+
+  @Get('scent-family/:scentFamily')
+  getByScentFamily(
+    @Param('scentFamily') scentFamily: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.productsService.getByScentFamily(scentFamily, page, limit);
+  }
+
+  @Get('occasion/:occasion')
+  getByOccasion(
+    @Param('occasion') occasion: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.productsService.getByOccasion(occasion, page, limit);
+  }
+
+  @Get('concentration/:concentration')
+  getByConcentration(
+    @Param('concentration') concentration: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.productsService.getByConcentration(concentration, page, limit);
+  }
+
+  @Get('oud-type/:oudType')
+  getByOudType(
+    @Param('oudType') oudType: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.productsService.getByOudType(oudType, page, limit);
+  }
+
+  @Get('season/:season')
+  getBySeason(@Param('season') season: string, @Query('limit') limit?: number) {
+    return this.productsService.getBySeason(season, limit);
+  }
+
+  @Get('time-of-day/:timeOfDay')
+  getByTimeOfDay(@Param('timeOfDay') timeOfDay: string, @Query('limit') limit?: number) {
+    return this.productsService.getByTimeOfDay(timeOfDay, limit);
+  }
+
+  @Get('longevity/range')
+  getByLongevity(
+    @Query('minHours') minHours: number,
+    @Query('maxHours') maxHours?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.productsService.getByLongevity(minHours, maxHours, limit);
+  }
+
+  @Get('clones/:brandName')
+  findClones(@Param('brandName') brandName: string, @Query('limit') limit?: number) {
+    return this.productsService.findClones(brandName, limit);
+  }
+
+  @Get('scent-dna/match')
+  findByScentDNA(
+    @Query('topNotes') topNotes?: string,
+    @Query('middleNotes') middleNotes?: string,
+    @Query('baseNotes') baseNotes?: string,
+    @Query('limit') limit?: number,
+  ) {
+    const topNotesArray = topNotes ? topNotes.split(',') : undefined;
+    const middleNotesArray = middleNotes ? middleNotes.split(',') : undefined;
+    const baseNotesArray = baseNotes ? baseNotes.split(',') : undefined;
+
+    return this.productsService.findByScentDNA(
+      topNotesArray,
+      middleNotesArray,
+      baseNotesArray,
+      limit,
+    );
+  }
+
+  @Get('type/original')
+  getOriginalPerfumes(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.productsService.getOriginalPerfumes(page, limit);
+  }
+
+  @Get('type/clone')
+  getClonePerfumes(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.productsService.getClonePerfumes(page, limit);
+  }
+
+  @Get('type/niche')
+  getNichePerfumes(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.productsService.getNichePerfumes(page, limit);
+  }
+
+  @Get('type/attar')
+  getAttarProducts(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.productsService.getAttarProducts(page, limit);
+  }
+
+  @Get('type/oud')
+  getOudProducts(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.productsService.getOudProducts(page, limit);
+  }
 }
